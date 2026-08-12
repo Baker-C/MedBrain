@@ -11,7 +11,8 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from prompts import QUERY_REWRITE
-from retrieval.tools.history import HistoryMessage, build_user_prompt
+from retrieval.contract import HistoryMessage
+from retrieval.query.transcript import build_user_prompt
 
 QUERY_REWRITER_MODEL = "gpt-5-mini"
 

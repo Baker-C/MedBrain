@@ -4,7 +4,7 @@ from typing import NoReturn, cast
 
 from openai import OpenAI, OpenAIError
 
-from retrieval.tools.query_rewriter import QueryRewrite, choose_query, run_query_rewriter
+from retrieval.query.query_rewriter import QueryRewrite, choose_query, run_query_rewriter
 
 
 def test_usable_rewrite_is_chosen() -> None:
