@@ -18,7 +18,7 @@ from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from openai import OpenAIError
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from prompts import RERANK
 from retrieval.contract import ScoredChunk
@@ -40,13 +40,16 @@ class RerankScores(BaseModel):
 RerankerModel = Runnable[LanguageModelInput, object]
 
 
-def build_reranker() -> RerankerModel:
-    """The configured reranker: gpt-5-nano constrained to the score schema.
+def build_reranker(api_key: str) -> RerankerModel:
+    """The configured reranker: gpt-5-nano constrained to the score schema, built by its
+    caller so the credential stays an explicit input.
 
     No temperature is set — the gpt-5 family only accepts its default. Determinism comes
     from the sort living in this module rather than from the sampler.
     """
-    return ChatOpenAI(model=RERANKER_MODEL).with_structured_output(RerankScores)
+    return ChatOpenAI(model=RERANKER_MODEL, api_key=SecretStr(api_key)).with_structured_output(
+        RerankScores
+    )
 
 
 def format_candidates(candidates: list[ScoredChunk]) -> str:
