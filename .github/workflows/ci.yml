@@ -19,6 +19,22 @@ jobs:
       - run: uv run mypy
       - run: uv run pytest
 
+  ingestion:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ingestion
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      # No --group extraction: Unstructured and its CV weights are the ingestion
+      # image's business, and nothing hermetic imports them.
+      - run: uv sync --frozen
+      - run: uv run ruff check . ../scripts/upload
+      - run: uv run mypy
+      - run: uv run mypy ../scripts/upload/upload_corpus.py
+      - run: uv run pytest
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
