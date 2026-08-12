@@ -8,6 +8,7 @@ dependencies = [
     "uvicorn",
     "langchain",
     "openai",
+    "psycopg[binary]",
     "supabase",
     "pydantic",
     "pydantic-settings",
@@ -33,7 +34,7 @@ select = ["E", "F", "I"]
 
 [tool.mypy]
 strict = true
-files = ["api", "chat", "config.py", "ingestion", "persistence", "retrieval", "tests"]
+files = ["api", "chat", "config.py", "healthcheck.py", "ingestion", "persistence", "retrieval", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
