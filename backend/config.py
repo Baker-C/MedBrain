@@ -10,3 +10,8 @@ class Settings(BaseSettings):
     supabase_service_key: str
     database_url: str
     openai_api_key: str
+
+
+def load_settings() -> Settings:
+    """Build Settings from the environment; the values mypy wants as arguments come from there."""
+    return Settings()  # type: ignore[call-arg]
