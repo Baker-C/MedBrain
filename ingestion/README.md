@@ -24,8 +24,13 @@ Then, from this directory:
 
 ```
 docker build -t medbrain-ingestion .
-docker run --rm --env-file .env medbrain-ingestion
+docker run --rm --network host --env-file .env medbrain-ingestion
 ```
+
+`--network host` matters on Docker Desktop (Windows/macOS): Supabase's direct database
+host resolves to IPv6 only, which the default bridge network cannot reach — the run
+fails with "Network is unreachable" at connect. Host networking routes through the
+host's stack, which has IPv6.
 
 The container exists because `hi_res` needs poppler, tesseract, and OpenCV — a Linux
 toolchain that is painful to install on Windows and identical everywhere inside an

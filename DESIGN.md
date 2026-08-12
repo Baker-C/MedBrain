@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 15:04 -07:00
+**Last updated:** 2026-08-12 15:12 -07:00
 
 ---
 
@@ -45,9 +45,9 @@ Built as a take-home assignment. The full spec is in
 | Eval judge LLM | OpenAI `gpt-5` — deliberately stronger than the generator; runs per eval suite, not per query |
 | Corpus files | Private **Supabase Storage bucket** is the source of truth; `DocumentCorpus/` in the repo is the seed copy, pushed up by a one-time local upload script. Backend mints short-lived (~5 min) signed URLs; file bytes never pass through the backend |
 | PDF extraction | Unstructured `hi_res` (local CV layout models) — tables come out as structured HTML |
-| Deploy | Render — backend (Docker web service) and frontend (static site), both declared in `render.yaml` at the repo root and deployed from the **`prod`** branch. The ingestion container runs **locally**, reading PDFs from the bucket and writing into hosted Supabase |
+| Deploy | Render — backend and frontend. The ingestion container runs **locally**, reading PDFs from the bucket and writing into hosted Supabase |
 | Auth | None. The app is open and all conversation history is visible to everyone. |
-| Repo | One repo: `frontend/`, `backend/` |
+| Repo | One repo, three projects plus scripts: `frontend/`, `backend/`, `ingestion/` (run-locally batch job, not deployed), `scripts/` |
 
 **Caching: none on the backend.** The frontend holds one sanctioned exception: an
 in-memory `id → conversation` map in the store — no TTL, no eviction, no persistence — so
@@ -106,10 +106,20 @@ corpus.
 
 **Quirks that remain, found by inspection, handled deliberately:**
 
-- **Two heading-numbering variants:** most docs use `5 WARNINGS AND PRECAUTIONS`;
-  Warfarin_2/3 use a trailing dot (`5.  WARNINGS`). Carving accepts the optional dot.
-- **Case signals level:** top-level headings are ALL-CAPS; subsections are Title Case
-  (`5.1 Hemorrhage`). The carving pattern handles both.
+- **Two heading-numbering variants, mixed *within* a document:** most headings read
+  `5 WARNINGS AND PRECAUTIONS`; some take a trailing dot (`5.  WARNINGS`). Warfarin_2
+  uses both on one page, so the optional dot is a per-heading rule, not a per-document
+  one.
+- **Case does not signal level** (corrected by inspection, 2026-08-12): `8.1  PREGNANCY`
+  is an ALL-CAPS *subsection* in Warfarin_2. Level comes from the number's shape
+  (`5` vs `5.1`); case is ignored entirely.
+- **Unnumbered sections are real content:** every document's boxed warning
+  (`WARNING: BLEEDING RISK`, `WARNING: SUICIDAL THOUGHTS AND BEHAVIORS`) carries no
+  number, and several carry a `MEDICATION GUIDE` after section 17. This is what
+  nullable `section_number` is actually for.
+- **Carton text mimics numbered headings:** `1 mg:`, `10 mg White (dye`, `30 Tablets`
+  all match a naive pattern — 27 false hits in Warfarin.pdf alone. Carving also
+  requires a title-shaped remainder and a section number within 1–17.
 - **Every doc self-duplicates:** HIGHLIGHTS restates the label; page 2–3 is a bare
   table of contents. **Both are excluded from the index at ingestion.**
 - **Same drug, multiple labelers:** 3 warfarins, 2 apixabans, etc. — near-identical
@@ -126,6 +136,29 @@ SHA-256 content hash → embed → reconcile into pgvector. Prerequisite: the on
 upload script seeds the bucket from `DocumentCorpus/` (storage only — it never writes
 the registry).
 
+**It is its own top-level project — `ingestion/`, beside `backend/` and `frontend/`,
+with its own `pyproject.toml`, lockfile, Dockerfile, and tests.** No API path reaches
+it and the backend never imports it; they meet only at Supabase. The separation is
+also what keeps the deployed backend lean: `unstructured[pdf]` and its CV weights sit
+in a non-default dependency group that only the ingestion image installs, so the
+backend image and CI cannot pull them in by accident. The schema stays owned by
+`backend/persistence/migrations/` — ingestion assumes the tables exist and writes rows
+into them, so there is exactly one DDL and one live-schema verifier.
+
+**Document identity** (`drug_name`, `manufacturer`, `formulation`) comes from one
+`gpt-5-mini` structured-output call per new or changed document, over the label's
+opening and closing text — where the product title and the "Manufactured by" statement
+live. It runs at ingestion, never per query. It **fails loudly**: a document whose
+identity cannot be read is not registered under a guess, because those fields are what
+a citation shows. `drug_name` is the lowercase generic — the string a citation renders.
+
+Both of ingestion's OpenAI calls obey the one-rule LangChain scope: identity is
+`ChatOpenAI.with_structured_output(DocumentIdentity)` with the result narrowed by
+`isinstance`, and chunk embedding is `OpenAIEmbeddings`, the same client the query side
+uses. `openai` is imported here only for `OpenAIError`. Ingestion calls Unstructured's
+`partition_pdf` directly rather than through `UnstructuredPDFLoader`, for the
+per-element `page_number` and table HTML the loader flattens away.
+
 **Exclusion list (applied at carving time):** the table-of-contents pages, the
 `HIGHLIGHTS OF PRESCRIBING INFORMATION` block, and the packaging sections
 (`PRINCIPAL DISPLAY PANEL` / `PACKAGE LABEL` variants, `INGREDIENTS AND APPEARANCE`)
@@ -135,18 +168,39 @@ packaging text (carton copy, NDC barcodes, UNII tables) pollutes exact-token spa
 search. Accepted cost: inactive-ingredient questions become unanswerable — usable eval
 material.
 
+**The exclusion list is implemented as a body window**, not as a per-section blocklist:
+the body opens after the last element whose text is exactly
+`FULL PRESCRIBING INFORMATION` (which drops HIGHLIGHTS and the TOC in one rule, since
+the contents page is headed `FULL PRESCRIBING INFORMATION: CONTENTS`) and closes at the
+first packaging heading. Both boundaries were verified present and correctly ordered in
+all 17 documents; packaging is terminal in every one, Warfarin.pdf included, where
+eleven display panels and the product-data tables run to the last page. Content before
+the first heading inside the window is TOC residue and is dropped — four documents leak
+the "Sections or subsections omitted…" footnote there.
+
 **Chunking:** Pass 1 carves the document into real sections from PLR numbered headers —
-**one strategy, no per-class branching**, since the corpus is uniformly PLR. The heading
-pattern accepts both observed variants (`5 WARNINGS` and `5.  WARNINGS` with trailing
-dot) and both levels (ALL-CAPS top-level, Title Case subsections like `5.1 Hemorrhage`).
-Pass 2 runs the recursive splitter *per section* (~1500 chars target), so sub-chunks
-cannot cross a section boundary by construction. Section header text is repeated at the
-top of each sub-chunk. Overlap exists only *within* a subdivided section, never between
-sections. Tables are atomic blocks — serialized from `hi_res` HTML; oversized tables
-split by row groups with the header row repeated. Images discarded. Nullable section
+**one strategy, no per-class branching**, since the corpus is uniformly PLR. A heading
+is a number of 1–17 with an optional trailing dot and an optional `.n` subsection, plus
+a title-shaped remainder; level comes from the number's shape, not from case. Carving
+splits at the **finest** heading, so `5.1 Hemorrhage` is its own section rather than
+part of a 20-page section 5, and a parent that holds only subsections yields no chunk
+of its own. Unnumbered structural headings (boxed warnings, `MEDICATION GUIDE`) carve
+sections with a null number.
+Pass 2 runs the recursive splitter *per section* (~1500 chars target, minus the space
+the repeated heading takes), so sub-chunks cannot cross a section boundary by
+construction. Section header text is repeated at the top of each sub-chunk. Overlap
+exists only *within* a subdivided section, never between sections. Tables are atomic
+blocks — serialized from `hi_res` HTML; oversized tables split by row groups with the
+header row repeated. Images discarded. Nullable section
 fields stay in the schema as cheap insurance: a chunk whose heading the pattern misses
 degrades to a doc+page citation instead of failing the document (missing *pages*, by
 contrast, fail loudly — see the citation floor).
+
+**Pages are resolved, not guessed.** Each element contributes a segment to its
+section's joined text; a chunk's page span is read from the segments its character
+range covers, using the offsets the splitter itself reports. A chunk whose range maps
+to no segment raises. Cross-page tables are stitched into one element that spans both
+pages, so a stitched table cites `page_start` and still records where it ends.
 
 **Idempotency — registry-driven reconciliation** (supersedes the earlier
 `ON CONFLICT DO NOTHING` design): a `documents` registry table stores each document's
@@ -154,8 +208,21 @@ raw-file SHA-256 plus its storage object key (how citations resolve back to the 
 file). Per run, reconciled **against the bucket**: new docs ingest, byte-identical docs skip entirely, changed
 docs reconcile at chunk level (unchanged hashes kept, orphans deleted, new chunks
 embedded), removed docs have their chunks deleted. Chunk changes + registry update
-commit in one transaction per document. Chunk hash is content-only — the embedding
+commit in one transaction per document — the connection is opened `autocommit=True` so
+each `connection.transaction()` block is a real per-document BEGIN/COMMIT rather than a
+savepoint inside one run-long transaction, and with TCP keepalives so the pooler cannot
+idle-kill the socket while a document spends minutes in extraction. Ingestion's
+`DATABASE_URL` points at Supabase's IPv4 session pooler, not the direct DB host — the
+direct host is IPv6-only and unreachable from Docker here. Chunk hash is content-only — the embedding
 config is fixed; changing it means a full re-embed anyway.
+
+**A kept chunk that moved is relocated, not re-embedded.** Because the hash covers
+content alone, a revised label can leave a chunk's text identical while its page or
+index changes — and the page is what the citation deep-links to. The chunk diff
+therefore has four outcomes, not three: insert, delete, *relocate* (update
+`page_start`/`page_end`/`chunk_index`/section in place, embedding untouched), and
+unchanged. Content that repeats inside one document collapses to a single chunk;
+`UNIQUE (document_id, content_sha256)` means the second copy would be the same row.
 
 ## Retrieval — the one stretch goal
 
@@ -208,10 +275,19 @@ from. Each tool that needs a model owns that choice and exposes a factory —
 (`gpt-5-nano` bound to the score schema) — and the built clients are passed into
 `run_retrieval` beside the raw `OpenAI` client the gate and rewriter still use. Injecting
 them rather than constructing them inside the tools is what keeps the unit tests hermetic.
-The tools (`embedder`, `dense_search`, `sparse_search`, `fusion`, `reranker`) know
-nothing about the toggles or about each other; every composition decision lives in
-`pipeline.py`. Both search legs select their columns from `ChunkRow.model_fields`, so a
-query cannot drift from the model that validates its rows.
+The tools know nothing about the toggles or about each other; every composition decision
+lives in `pipeline.py`. Both search legs select their columns from
+`ChunkRow.model_fields`, so a query cannot drift from the model that validates its rows.
+
+**Package layout — the folders are the pipeline stages.** `retrieval/` holds `config.py`
+(the switches), `contract.py` (the vocabulary callers speak — `HistoryMessage`,
+`ScoredChunk`, `Refusal`, `Retrieved`), `pipeline.py` (composition only), and three stage
+packages: **`query/`** (advice gate, query rewriter, and the transcript rendering they
+share) → **`search/`** (embeddings client, dense leg, sparse leg, and the chunk columns
+plus row reader they share) → **`ranking/`** (RRF fusion, LLM reranker). Callers import
+`retrieval.contract` and `retrieval.pipeline`; the stage packages are internal. Each
+stage's shared helper lives inside that stage, so no module sits in a folder it does not
+belong to. `tests/retrieval/` mirrors the layout.
 
 **Embedding config is fixed, not environment-tunable.** `EMBEDDING_MODEL` and
 `EMBEDDING_DIMENSIONS` are constants in `backend/config.py`, imported by both retrieval
@@ -222,7 +298,7 @@ files differing per machine is precisely the silent drift the single definition 
 prevent.
 
 **The gate and the rewriter run first — before anything is embedded or retrieved.**
-They are two self-contained tools in `retrieval/tools/`, each with its own prompt,
+They are two self-contained tools in `retrieval/query/`, each with its own prompt,
 response schema, and `gpt-5-mini` structured-output call on the raw query
 (+ conversation history), composed by `retrieval/pipeline.py`'s `prepare_query()`:
 gate first — a refusal stops the pipeline — then rewrite. The **advice gate**
@@ -240,7 +316,7 @@ pre-written refusal with an empty sources mapping: no embedding, retrieval, or
 generation. Both adapters still call the OpenAI SDK's structured-output parse directly;
 moving them onto `ChatOpenAI.with_structured_output` to match the one-rule LangChain scope
 is pending (see debt). The shared history-transcript rendering lives in
-`retrieval/tools/history.py`. Prompt text and canned user-facing messages live
+`retrieval/query/transcript.py`. Prompt text and canned user-facing messages live
 one-per-file in `backend/prompts/` and `backend/messages/`, re-exported through each
 package's `__init__.py` index — the convention for every later prompt-bearing stage
 (generation, reranker) and canned response.
@@ -294,6 +370,51 @@ therefore typed.
 · `POST /conversations/{id}/query` (SSE; `?trace=true` returns one JSON payload) ·
 `GET /documents/{id}/source-url` · `GET /health`.
 
+**The built API shape.** `api/` is routing and transport only: `app.py` (factory:
+lifespan plus one `psycopg.Error → 503` handler), `dependencies.py` (a psycopg
+connection per request — deliberately no pool at demo scale, Supabase's pooler absorbs
+the churn — plus the typed accessor holding the single `cast` off `app.state`),
+`models.py` (request bodies, the four pipeline toggles mapping onto `RetrievalConfig`,
+and the trace payload — row models serialize directly as responses), `sse.py` (the
+wire framing, and the only module that knows the transport is SSE), and `routes.py`
+(handlers that call `prepare_turn` and nothing deeper). `clients.py` at the backend
+root is the composition root — every shared client built once at startup from explicit
+settings: generation `ChatOpenAI`, embeddings, reranker, the raw `OpenAI` the
+gate/rewriter still use, and the Supabase storage client. It sits outside `api/`
+because the eval harness builds the same clients with no app around them.
+
+Non-streaming handlers are plain `def`, so FastAPI's threadpool absorbs their blocking
+I/O; only the query endpoint is async, and its blocking prefix is a single
+`run_in_threadpool(prepare_turn, …)`. SSE is hand-rolled — `StreamingResponse` over
+`encode_sse` frames; `sse-starlette` was rejected because it would make the tested
+encoder dead code. The `build_embeddings(api_key)` / `build_reranker(api_key)`
+factories take the credential explicitly (the `.env`-not-in-`os.environ` trap is
+closed; nothing reads ambient env). `CORPUS_BUCKET = "corpus"` and the 300 s
+signed-URL TTL are fixed constants in `config.py`; the upload script must seed that
+bucket name.
+
+**`conversation/` composes one question end to end**, and is the only module that
+knows `retrieval/`, `chat/`, and `persistence/` all exist. `turn.py` holds
+`prepare_turn()`: retrieval, then the chunk→document join, then the answer stream,
+returning a `Turn` (the searched query, whether it was refused, the scored chunks,
+the joined chunks, and the events). It is **the one place a refusal is told apart from
+a retrieved result** — a refusal is simply a turn with no query, no chunks, and the
+canned stream — so the SSE endpoint, the trace endpoint, and the eval harness all read
+the same fields and none of them branches. `history.py` adapts between stored messages
+and the two packages' own shapes (`MessageRow` → `HistoryMessage`; the citation mapping
+→ its `jsonb` snapshot). `persist.py` is a pass-through wrapper, so persistence is
+something a caller *adds to a stream* rather than a step inside it: the SSE endpoint
+wraps, the trace endpoint and the harness do not. History writes: the user message
+lands before the stream starts, the assistant message at `done` with the frozen sources
+snapshot, written before that event is yielded so a failed write cannot follow a
+success signal; a refusal persists with an empty snapshot through that same path, with
+no special case; an errored stream never reaches `done` and persists nothing.
+
+**CORS:** `create_app()` wires Starlette's `CORSMiddleware` allowing one origin from
+`Settings.frontend_origin` (`FRONTEND_ORIGIN` env var, default `http://localhost:5173`
+for the Vite dev server). The deployed frontend origin is set via that env var on the
+backend host.
+
 **There is no DELETE and no PATCH, and that decides conversation lifecycle in the
 client.** A conversation is created lazily, on its first question, and titled from that
 question — the only moment a title can be set. Creating one on the "New chat" click
@@ -314,27 +435,32 @@ citation. At context-assembly time each retrieved chunk gets a per-query sentine
 sent to the client as the first SSE event, before any tokens**, so citation resolution
 is client-side rendering — the backend never rewrites a stream. Event order: `sources` →
 `token`(s, sentinels passed through raw; client buffers split sentinels) → `done` (carries
-post-hoc annotations) / `error`. Gating decides what streams before tokens flow. Trace
-mode returns one JSON payload (answer + full retrieval trace + scores) instead of a
-stream — that is what the eval harness consumes.
+post-hoc annotations) / `error`. Gating decides what streams before tokens flow. The eval
+harness consumes the same events in-process, collected into one payload by
+`collect_answer()` — it does not go over HTTP (see Eval harness).
 
-**The built shape.** `backend/chat/` splits four ways. `context.py` is pure: it assigns
-positional tags (`S1`, `S2`, …), builds the tag→citation mapping, renders the tagged
-excerpts the prompt carries, and extracts the tags an answer actually emitted (the input
-to the eval's grounding check). `events.py` defines the four event payloads and their SSE
-encoding — payloads are JSON, so a newline inside answer text cannot split a frame.
-`generation.py` is the adapter: it owns the model choice and yields `ChatOpenAI.astream`
-deltas. `answer.py` composes them into `stream_answer_events()`, which the SSE endpoint
-serves, and `trace_answer()`, which collects the **same** event stream into one payload —
-so the eval harness measures the path users actually get instead of a parallel one.
+**The built shape.** `backend/chat/` is a self-contained generation package that knows
+nothing about conversations, history, or transports. `contract.py` is the vocabulary
+callers speak — `RetrievedChunk` going in, the four event payloads and `Citation` coming
+out, and the `CollectedAnswer` a finished stream folds into; nothing outside the package
+imports anything deeper. `join.py` pairs retrieved chunks with their parent documents
+(one query, then a pure pairing). `context.py` is pure: it assigns positional tags
+(`S1`, `S2`, …), builds the tag→citation mapping, renders the tagged excerpts the prompt
+carries, and extracts the tags an answer actually emitted (the input to the eval's
+grounding check). `generation.py` is the adapter: it owns the model choice and yields
+`ChatOpenAI.astream` deltas. `stream.py` produces the events. `collect.py` folds them
+back, and is **written once and used twice** — the history write freezes the fold onto
+the assistant message and the eval harness scores it, and the two must not disagree. How
+an event reaches a client is not this package's business: the SSE framing lives in
+`api/sse.py`, so payloads are JSON and a newline inside answer text cannot split a frame.
 
 **Its input is `RetrievedChunk`: a `ChunkRow` plus the document it belongs to**, where the
 document is reached through a `CitedDocument` `Protocol` declaring only `id` and
 `drug_name`. `DocumentRow` satisfies it structurally, so no field is re-declared and a
 rename in the row model fails the type check rather than drifting; inside `chat/`, reading
 any other document field is a mypy error. Retrieval returns `ScoredChunk` (a `ChunkRow`
-plus its scores) and does not carry the document, so joining chunk to document is the
-query endpoint's job.
+plus its scores) and does not carry the document, so joining chunk to document is
+`chat/join.py`'s job, called from `prepare_turn()`.
 
 **A citation is `document_id` + `drug` + `section_number` + `section_title` +
 `page_start`.** Section fields go null on a chunk with no carved section; `page_start` is
@@ -353,6 +479,27 @@ decline path with no extra branch and no generation spend.
 **A failure partway through a stream ends in `error`, not `done`.** The client has already
 rendered part of an answer, so a dropped generation call emits an `error` event carrying a
 canned message rather than truncating silently — the mid-stream case the assignment names.
+
+**The client shape.** `api/http.ts` is the shared boundary — URL building, `ApiError`,
+JSON requests; `api/client.ts` holds the four non-streaming calls; `api/stream.ts` reads
+the SSE body by hand, because `EventSource` only issues GET and the query endpoint is a
+POST. Frame splitting (`lib/sse.ts`), sentinel buffering (`lib/sentinels.ts`) and title
+derivation (`lib/title.ts`) are pure functions with no network, unit-tested directly.
+Responses are **cast, not validated**: there is no runtime schema layer, so a backend
+rename surfaces as a broken render rather than a typed error (see debt).
+`state/ConversationStore.tsx` owns the cache *and* the streams — a stream writes into the
+store, never into component state, because a message is persisted server-side only at
+`done`, so an unmounting component would otherwise destroy text that exists nowhere else.
+The composer is disabled while its conversation streams, which makes one-stream-per-
+conversation true by construction instead of by reconciliation.
+
+**A stream that ends without `done` or `error` is an interruption.** At the byte level a
+dropped connection is indistinguishable from a clean finish — the reader simply ends — so
+the client tracks whether a terminal event arrived and treats its absence as failure. The
+partial answer is kept on screen and labeled incomplete rather than discarded: it got as
+far as it got, and hiding that is less honest than showing it. Half-arrived sentinels are
+withheld while streaming, so `[[S` never flashes as literal text before its brackets
+land.
 
 **The generation prompt sees the standalone question and the excerpts only — never the
 conversation history.** Making a follow-up standalone is the query rewriter's job, and
@@ -378,27 +525,6 @@ break the URL signature — and the PDF opens in a new tab straight from Supabas
 landing on the cited page in browsers whose PDF viewer honors `#page=` (Chromium,
 Firefox; Safari degrades to page 1). The backend never proxies file bytes.
 
-**The client shape.** `api/http.ts` is the shared boundary — URL building, `ApiError`,
-JSON requests; `api/client.ts` holds the four non-streaming calls; `api/stream.ts` reads
-the SSE body by hand, because `EventSource` only issues GET and the query endpoint is a
-POST. Frame splitting (`lib/sse.ts`), sentinel buffering (`lib/sentinels.ts`) and title
-derivation (`lib/title.ts`) are pure functions with no network, unit-tested directly.
-Responses are **cast, not validated**: there is no runtime schema layer, so a backend
-rename surfaces as a broken render rather than a typed error (see debt).
-`state/ConversationStore.tsx` owns the cache *and* the streams — a stream writes into the
-store, never into component state, because a message is persisted server-side only at
-`done`, so an unmounting component would otherwise destroy text that exists nowhere else.
-The composer is disabled while its conversation streams, which makes one-stream-per-
-conversation true by construction instead of by reconciliation.
-
-**A stream that ends without `done` or `error` is an interruption.** At the byte level a
-dropped connection is indistinguishable from a clean finish — the reader simply ends — so
-the client tracks whether a terminal event arrived and treats its absence as failure. The
-partial answer is kept on screen and labeled incomplete rather than discarded: it got as
-far as it got, and hiding that is less honest than showing it. Half-arrived sentinels are
-withheld while streaming, so `[[S` never flashes as literal text before its brackets
-land.
-
 ## Eval harness
 
 Its own project feature and the heaviest-weighted piece of engineering. Requirements:
@@ -408,16 +534,56 @@ questions the app must decline. It scores **both** retrieval quality (hit rate /
 against expected sources) and answer quality, runs from a single command, and prints a
 report. If time runs short, cut a UI feature — never the eval harness.
 
-Shape: ~15–20 hand-authored prompts, each labeled with expected documents + sections and
-an expected answer (refusal text for unanswerables). The harness drives the **real
-backend** through the query endpoint's trace mode, varying one pipeline toggle at a time
-— dense alone, dense + sparse, and each of those with the reranker on. Metrics:
-Recall@K, MRR, Precision@K at
-document and section granularity; behavioral checks for look-alike discrimination
-(sertraline vs escitalopram, warfarin vs apixaban), unanswerable behavior, and a
-grounding check that every emitted citation tag resolves to an actually-retrieved chunk.
-Answer quality is scored by an **eval-side LLM judge inside the harness** — automated
-and mandatory (distinct from the optional live-pipeline judge, which only annotates).
+**It runs in-process — no HTTP, no running server.** The harness is a backend package,
+`backend/eval/`, run as `python -m eval` (kept out of the deployed image via
+`.dockerignore`, out of the repo's history via a gitignored `eval/runs/`). It calls
+`prepare_turn()` — the same single function the query endpoint composes its response
+from — and opens its own psycopg connection (hosted Supabase) and model clients. It
+measures the path users get because there is only one path to call; a refused case
+needs no special handling in the driver, because a refusal is just a `Turn` with no
+query and no chunks. The one part it does not exercise is the conversation-history write,
+deliberately — a full run is ~72 pipeline calls and must not bury the shared history
+in robot conversations — and that write is covered by unit tests. This supersedes
+driving the endpoint's `?trace=true` mode over HTTP; the harness no longer consumes
+trace mode (whether the endpoint keeps it as a debug affordance is an endpoint
+question, to reconcile at the API merge).
+
+**Suite:** 18 single-turn cases in `eval/suite.py` as typed literals (mypy checks
+ground truth at author time): 7 single-section/table lookups, 3 cross-document
+synthesis, 3 discrimination traps carrying `forbidden_drugs`, 3 unanswerable (the
+deliberately-cut drugs and excluded-section content), 2 personal-advice refusals. An
+expected source is `(document_id, drug, section_number)`.
+
+**Scoring (built — `eval/scoring/`, pure, hermetic, in CI):** Recall@K, MRR,
+Precision@K, each under two lenses — **strict** (exact document) and **lenient** (any
+sibling label of the same drug) — at document and section granularity. Six of ten
+drugs have sibling labels, so the lenses genuinely differ; the gap between them is
+itself a reported finding. Behavioral checks: advice cases must be gate-refused with
+the advice refusal itself (a fail-closed refusal does not pass), unanswerables must
+end in the canned no-context message or a generated does-not-cover admission,
+discrimination traps (sertraline vs escitalopram, warfarin vs apixaban) must serve no
+forbidden drug. Grounding: every emitted tag resolves to a served chunk. Answer
+quality: the **eval-side judge** — `gpt-5` via `ChatOpenAI.with_structured_output`,
+deliberately stronger than the generator — scores each answer against the expected
+answer and the served excerpts; automated and mandatory (distinct from the optional
+live-pipeline judge, which only annotates).
+
+**Configurations (`eval/configs.py`):** four per case — dense · dense+sparse ·
+dense+rerank · dense+sparse+rerank — the stretch goal's graded before/after. Gate and
+rewriter stay on throughout: the advice cases need the gate, and on a single-turn
+suite the rewrite delta would measure only normalization (recorded limitation).
+
+**Record/replay:** a run saves every trace to `eval/runs/<timestamp>.json`;
+`--score-only <run>` re-scores a saved run offline, so scoring and judge iteration
+cost zero pipeline calls. The saved run backs the failure analysis.
+
+**Build state:** the harness is fully built — contracts, `scoring/` (in CI), `judge.py`,
+`report.py`, `driver.py` (reuses the API's composition root, `build_clients`), and
+`python -m eval` with a guard that refuses to run while `suite.py` still contains
+authoring placeholders. The 18 cases are drafted with every expected source verified
+against extracted label text (pending owner review — see `AI_USAGE_RECORDS.md`); what
+remains before a real run is an ingested corpus, and the driver is unexercised against
+live data until ingestion has run.
 
 ## Testing and CI
 
@@ -451,47 +617,11 @@ Two test layers, deliberately separate:
   come). Used locally and as a post-deploy smoke test.
 
 **CI (GitHub Actions, on pull requests + pushes to `main`):** backend — ruff, mypy,
-pytest (hermetic only); frontend — eslint, tsc, vitest, build. Both jobs run
-unconditionally on every PR (no path filtering). No secrets in CI.
-
-## Deployment
-
-**`render.yaml` at the repo root declares both services**, applied as a Render Blueprint
-from the **`prod`** branch — a long-lived deploy branch fast-forwarded from `main`, so
-what is live is always a commit that passed CI. `ingestion/` is deliberately absent from
-the blueprint: it is a run-once local batch job.
-
-**Backend — Docker web service**, `rootDir: backend`, health check `/health`. The
-container binds `$PORT`, which Render injects, so the `CMD` is shell form with an
-`exec` prefix: shell form because the exec form would pass uvicorn the literal string
-`$PORT`, and `exec` so uvicorn is PID 1 and receives the `SIGTERM` Render sends to drain
-a deploy — without it a redeploy would wait out the kill timeout on every ship. Uvicorn
-is called directly off the synced venv (`ENV PATH=/app/.venv/bin:$PATH`) rather than
-through `uv run`, which would otherwise sit between the container and its own process.
-
-**`DATABASE_URL` must be the Supavisor *session* pooler URI (port 5432)** — not
-Supabase's direct connection, whose host is IPv6-only while Render has no IPv6 egress,
-and not the transaction pooler on 6543, which rejects the prepared statements psycopg3
-issues once a query repeats. This is the one env value whose *form* is load-bearing.
-
-**Frontend — static site**, `npm ci && npm run build`, published from `dist`. No SPA
-rewrite rule: the app is a single route with no client-side router.
-
-**The two services reference each other's URLs, and neither can be filled in by the
-blueprint.** The backend's `FRONTEND_ORIGIN` is the single origin CORS allows; the
-frontend's `VITE_API_BASE_URL` is baked into the bundle at build time. Render's
-`fromService` yields a bare hostname with no scheme, so both are declared `sync: false`
-and set once in the dashboard after the first apply — and the frontend needs an explicit
-redeploy after its value lands, because changing a build-time variable does not change an
-already-built bundle.
-
-**A missing `VITE_API_BASE_URL` fails the build rather than shipping.** `vite.config.ts`
-throws on a production build when the variable is unset; previously the build went green
-and produced a bundle requesting `undefined/conversations`, a failure visible only in the
-browser. CI passes a placeholder URL, since CI only proves the bundle compiles.
-
-**Free tier, accepted:** the backend instance spins down after inactivity, so the first
-request after an idle period pays a cold start before any token streams.
+pytest (hermetic only); ingestion — the same three, plus ruff and mypy over the upload
+script, and deliberately *without* `--group extraction`, so no CV model weights are
+downloaded and no test can quietly depend on them; frontend — eslint, tsc, vitest,
+build. All three jobs run unconditionally on every PR (no path filtering). No secrets
+in CI.
 
 ## Failure analysis
 
@@ -526,6 +656,18 @@ Known scaling limits already identified:
   colliding with the retrieval session working in those files.
 - The live LLM-as-judge is not built. `DoneEvent.judge_grounded` is the typed slot it
   would fill and currently always serializes as `null`.
+- **The carving rules are validated against `pypdf` text, not against live `hi_res`
+  output.** Every boundary rule was checked over all 17 PDFs, but through a different
+  extractor than the one that ships. `hi_res` returns better reading order and real
+  element categories, so the rules should hold or improve — but the first real run is
+  the first time the two meet. That run is the next step, and it is where a surprise
+  would appear.
+- Ingestion has no live smoke test yet. The hermetic suite covers the pure stages; the
+  adapters (`extraction`, `storage`, `embedding`, `identity`, `registry`) are exercised
+  only by an actual run.
+- The bucket listing reads a single page of results. Correct for 17 documents, wrong
+  somewhere past the API's default page size — one of the concrete things "scaling to
+  10,000 documents" has to fix.
 - **The frontend casts API responses instead of validating them.** There is no runtime
   schema layer, so the backend row models are enforced on their side of the wire and
   nowhere on this one. A renamed field becomes `undefined` inside a component rather than
@@ -535,9 +677,6 @@ Known scaling limits already identified:
 - **The frontend has no mock backend outside tests.** `npm run dev` renders a UI wired to
   a backend that must actually exist. The first real HTTP request the client ever makes
   will be on cutover day.
-- **The backend mounts no CORS middleware.** `api/app.py` adds none, so a browser calling
-  it cross-origin will be blocked. Either middleware or a Vite dev proxy has to land
-  before the frontend talks to a real backend.
 - The assistant messages the client renders after a stream are built locally rather than
   re-fetched, so a conversation's cached view is the client's reconstruction until the
   next full load. It matches what the backend persisted at `done`; it is not read back to

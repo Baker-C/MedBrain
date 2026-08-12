@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
 from chat.contract import RetrievedChunk
+from eval.trace import CaseTrace, ChunkTrace
 from persistence.rows import ChunkRow, DocumentRow
 
 
@@ -112,5 +113,53 @@ def failing_model() -> Callable[..., BaseChatModel]:
                 raise OpenAIError("connection lost")
 
         return cast(BaseChatModel, Model())
+
+    return build
+
+
+@pytest.fixture
+def make_chunk_trace() -> Callable[..., ChunkTrace]:
+    """Build a chunk trace whose identity fields are under test; the rest is filler."""
+
+    def build(
+        document_id: str = "Warfarin",
+        drug: str = "warfarin",
+        section_number: str | None = "5.1",
+    ) -> ChunkTrace:
+        return ChunkTrace(
+            document_id=document_id,
+            drug=drug,
+            section_number=section_number,
+            section_title=None,
+            page_start=1,
+            content="excerpt",
+            dense_rank=1,
+            sparse_rank=None,
+            rrf_score=0.016,
+            rerank_score=None,
+        )
+
+    return build
+
+
+@pytest.fixture
+def make_case_trace() -> Callable[..., CaseTrace]:
+    """Build a case trace around an answer; the behavior checks read little else."""
+
+    def build(
+        answer: str,
+        refused: bool = False,
+        chunks: list[ChunkTrace] | None = None,
+    ) -> CaseTrace:
+        return CaseTrace(
+            case_id="case",
+            config_name="dense",
+            searched_query=None if refused else "query",
+            refused=refused,
+            chunks=chunks or [],
+            answer=answer,
+            sources={},
+            tags=[],
+        )
 
     return build
