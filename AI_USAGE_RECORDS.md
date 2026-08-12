@@ -720,3 +720,98 @@ the two sides aligned.
    judge?: boolean
  }
 ```
+
+
+## Backend container CMD — port binding and signal handling
+
+**Timestamp:** 2026-08-12 15:04 -07:00
+
+**What it ended up as:** the backend Dockerfile's `CMD`, plus a `PATH` line above it.
+
+**The change and the reasoning.** The AI-written Dockerfile ended in an exec-form
+`CMD ["uv", "run", "--no-sync", "uvicorn", ..., "--port", "8000"]`. Two faults surfaced
+only when it was pointed at Render. First, the port is hardcoded, and Render injects the
+port to bind as `$PORT` — but the exec form does not go through a shell, so switching the
+literal to `$PORT` would have handed uvicorn the four-character string `$PORT`. Second,
+and less visible: `uv run` spawns uvicorn as a child process, so `SIGTERM` sent to the
+container to drain a deploy would stop at `uv` and never reach the server, making every
+redeploy wait out the kill timeout.
+
+The first draft of the fix only addressed the port, switching to shell form. Docker's own
+`JSONArgsRecommended` warning named the signal problem, which was then fixed properly:
+put the synced venv on `PATH` so uvicorn is invoked directly with no `uv` wrapper, and
+prefix the command with `exec` so the shell replaces itself with uvicorn. Verified by
+running the image with `PORT=10000` — uvicorn logs `Started server process [1]`, `/health`
+returns 200, and `docker stop -t 30` completes in 1.2 s rather than timing out.
+
+**The code diff and its commit.** Commit: pending (`prod` branch, Render deployment).
+
+```diff
+ COPY pyproject.toml uv.lock ./
+ RUN uv sync --frozen --no-dev
+
++# Put the synced venv on PATH so uvicorn is called directly rather than through
++# `uv run`, which would sit between the container and its process as an extra parent.
++ENV PATH="/app/.venv/bin:$PATH"
++
+ COPY . .
+
+ EXPOSE 8000
+-CMD ["uv", "run", "--no-sync", "uvicorn", "api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
++# Shell form so $PORT expands - Render injects the port to bind, and the exec form
++# would hand uvicorn the literal string "$PORT". `exec` then replaces the shell, so
++# uvicorn is PID 1 and receives the SIGTERM Render sends to drain a deploy.
++CMD exec uvicorn api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+## Frontend build guard for a missing backend URL
+
+**Timestamp:** 2026-08-12 15:04 -07:00
+
+**What it ended up as:** a production-build assertion in `frontend/vite.config.ts`.
+
+**The change and the reasoning.** `API_BASE_URL` was AI-written as a bare read of
+`import.meta.env.VITE_API_BASE_URL` typed `string`. Running Render's build command
+locally with the variable unset showed the failure mode: the build succeeds, TypeScript
+is satisfied because the declared type lies, and the shipped bundle requests
+`undefined/conversations`. On a deploy host that means a green build and an app that is
+broken only in the browser.
+
+Rejected: throwing at module load in `endpoints.ts`. It surfaces the same fault one layer
+later — the deploy still reports success and the failure still appears only when a user
+opens the page. The check belongs where it can fail the build, so it went into
+`vite.config.ts` guarded on `command === 'build'`, leaving `npm run dev` (which reads
+`.env`) and Vitest (which injects the variable in `test.env`) untouched. `loadEnv` is
+merged with `process.env` so a dashboard-set variable and a `.env` file both satisfy it.
+CI's build step now passes a placeholder URL, since CI only proves the bundle compiles.
+
+Verified: build without the variable exits 1; build with it emits `dist/`; lint,
+typecheck, and all 30 frontend tests pass.
+
+**The code diff and its commit.** Commit: pending (`prod` branch, Render deployment).
+
+```diff
++import { loadEnv } from 'vite'
+ import { defineConfig } from 'vitest/config'
+
++/**
++ * Fail the build when the backend URL is missing, rather than shipping a bundle that
++ * requests `undefined/conversations`. Without this the deploy host builds green and
++ * the app breaks only in the browser.
++ */
++function requireApiBaseUrl(mode: string): void {
++  const env = { ...loadEnv(mode, process.cwd(), 'VITE_'), ...process.env }
++  if (!env.VITE_API_BASE_URL) {
++    throw new Error('VITE_API_BASE_URL is not set - see frontend/.env.example')
++  }
++}
++
+-export default defineConfig({
+-  plugins: [react(), tailwindcss()],
+-  ...
+-})
++export default defineConfig(({ command, mode }) => {
++  if (command === 'build') requireApiBaseUrl(mode)
++  return { plugins: [react(), tailwindcss()], ... }
++})
+```

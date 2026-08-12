@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 11:40 -07:00
+**Last updated:** 2026-08-12 15:04 -07:00
 
 ---
 
@@ -45,7 +45,7 @@ Built as a take-home assignment. The full spec is in
 | Eval judge LLM | OpenAI `gpt-5` — deliberately stronger than the generator; runs per eval suite, not per query |
 | Corpus files | Private **Supabase Storage bucket** is the source of truth; `DocumentCorpus/` in the repo is the seed copy, pushed up by a one-time local upload script. Backend mints short-lived (~5 min) signed URLs; file bytes never pass through the backend |
 | PDF extraction | Unstructured `hi_res` (local CV layout models) — tables come out as structured HTML |
-| Deploy | Render — backend and frontend. The ingestion container runs **locally**, reading PDFs from the bucket and writing into hosted Supabase |
+| Deploy | Render — backend (Docker web service) and frontend (static site), both declared in `render.yaml` at the repo root and deployed from the **`prod`** branch. The ingestion container runs **locally**, reading PDFs from the bucket and writing into hosted Supabase |
 | Auth | None. The app is open and all conversation history is visible to everyone. |
 | Repo | One repo: `frontend/`, `backend/` |
 
@@ -453,6 +453,45 @@ Two test layers, deliberately separate:
 **CI (GitHub Actions, on pull requests + pushes to `main`):** backend — ruff, mypy,
 pytest (hermetic only); frontend — eslint, tsc, vitest, build. Both jobs run
 unconditionally on every PR (no path filtering). No secrets in CI.
+
+## Deployment
+
+**`render.yaml` at the repo root declares both services**, applied as a Render Blueprint
+from the **`prod`** branch — a long-lived deploy branch fast-forwarded from `main`, so
+what is live is always a commit that passed CI. `ingestion/` is deliberately absent from
+the blueprint: it is a run-once local batch job.
+
+**Backend — Docker web service**, `rootDir: backend`, health check `/health`. The
+container binds `$PORT`, which Render injects, so the `CMD` is shell form with an
+`exec` prefix: shell form because the exec form would pass uvicorn the literal string
+`$PORT`, and `exec` so uvicorn is PID 1 and receives the `SIGTERM` Render sends to drain
+a deploy — without it a redeploy would wait out the kill timeout on every ship. Uvicorn
+is called directly off the synced venv (`ENV PATH=/app/.venv/bin:$PATH`) rather than
+through `uv run`, which would otherwise sit between the container and its own process.
+
+**`DATABASE_URL` must be the Supavisor *session* pooler URI (port 5432)** — not
+Supabase's direct connection, whose host is IPv6-only while Render has no IPv6 egress,
+and not the transaction pooler on 6543, which rejects the prepared statements psycopg3
+issues once a query repeats. This is the one env value whose *form* is load-bearing.
+
+**Frontend — static site**, `npm ci && npm run build`, published from `dist`. No SPA
+rewrite rule: the app is a single route with no client-side router.
+
+**The two services reference each other's URLs, and neither can be filled in by the
+blueprint.** The backend's `FRONTEND_ORIGIN` is the single origin CORS allows; the
+frontend's `VITE_API_BASE_URL` is baked into the bundle at build time. Render's
+`fromService` yields a bare hostname with no scheme, so both are declared `sync: false`
+and set once in the dashboard after the first apply — and the frontend needs an explicit
+redeploy after its value lands, because changing a build-time variable does not change an
+already-built bundle.
+
+**A missing `VITE_API_BASE_URL` fails the build rather than shipping.** `vite.config.ts`
+throws on a production build when the variable is unset; previously the build went green
+and produced a bundle requesting `undefined/conversations`, a failure visible only in the
+browser. CI passes a placeholder URL, since CI only proves the bundle compiles.
+
+**Free tier, accepted:** the backend instance spins down after inactivity, so the first
+request after an idle period pays a cold start before any token streams.
 
 ## Failure analysis
 

@@ -1670,3 +1670,37 @@ streams, which guarantees one stream per conversation by construction instead of
 re-entrancy logic. `AbortController` is still plumbed through the client for teardown and
 so tests do not leak readers; nothing in the UI cancels. Cancellation is not among the
 four graded answer behaviors.
+
+
+## Render deployment: a `prod` deploy branch and a checked-in Blueprint
+
+**Timestamp:** 2026-08-12 15:04 -07:00
+
+Both services deploy from a long-lived **`prod`** branch, fast-forwarded from `main`, and
+are declared in a **`render.yaml` Blueprint** at the repo root rather than clicked
+together in the dashboard.
+
+Rejected: creating the two services by hand in the Render UI. It is faster to start and
+leaves nothing to review, but the configuration then exists only inside a vendor account
+— unreproducible, invisible in the diff, and gone if a service is deleted. The Blueprint
+costs one file and makes `rootDir`, health check path, build command, and the full env-var
+surface reviewable alongside the code they configure.
+
+Rejected: deploying `main` directly. `prod` decouples "merged" from "live", so a merge
+does not ship, and what is live is always a commit that has passed CI.
+
+Rejected: a Render static-site rewrite proxying `/api` to the backend, which would have
+made the two services same-origin and deleted the CORS configuration and the
+`FRONTEND_ORIGIN` variable entirely. Declined because SSE through Render's static-site
+rewrite layer is unverified, and streaming is a graded behavior — not the place to take
+an untested dependency to save one env var.
+
+**`DATABASE_URL` must be the Supavisor session pooler (5432).** Two plausible values are
+both wrong: Supabase's direct connection host is IPv6-only and Render has no IPv6 egress,
+so it fails to connect at all; the transaction pooler (6543) connects and then fails once
+psycopg3 begins issuing prepared statements for a repeated query. The session pooler is
+the only form that works with a per-request psycopg connection and no pool.
+
+**Free instance tier, accepted.** The backend spins down when idle, so the first question
+after a quiet period waits out a cold start before the first token. Paying for an
+always-on instance buys demo smoothness and nothing that is graded.

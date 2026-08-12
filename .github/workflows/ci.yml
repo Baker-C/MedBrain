@@ -49,4 +49,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      # The build refuses to run without a backend URL (vite.config.ts). CI only
+      # proves the bundle compiles, so any well-formed URL satisfies it.
       - run: npm run build
+        env:
+          VITE_API_BASE_URL: http://ci.invalid
