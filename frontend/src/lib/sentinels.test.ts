@@ -24,7 +24,7 @@ describe('toSegments', () => {
 })
 
 describe('splitHeldSuffix', () => {
-  it.each(['[', '[[', '[[S', '[[S1', '[[S12'])('withholds the partial tag %j', (partial) => {
+  it.each(['[', '[[', '[[S', '[[S1', '[[S12', '[[S1]'])('withholds the partial tag %j', (partial) => {
     expect(splitHeldSuffix(`done ${partial}`)).toEqual({ ready: 'done ', held: partial })
   })
 

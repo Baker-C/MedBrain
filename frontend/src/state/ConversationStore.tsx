@@ -245,6 +245,16 @@ export function ConversationProvider({ children }: { children: ReactNode }) {
         return
       }
     }
+    // A partial answer left by a failed stream would be overwritten by the next
+    // `answer/started`; keep what arrived by committing it to the transcript first.
+    const stalled = state.answers[conversationId]
+    if (stalled !== undefined && stalled.status === 'incomplete' && stalled.text !== '') {
+      dispatch({
+        type: 'answer/completed',
+        conversationId,
+        message: localMessage(conversationId, 'assistant', stalled.text, stalled.sources),
+      })
+    }
     dispatch({
       type: 'message/appended',
       conversationId,
