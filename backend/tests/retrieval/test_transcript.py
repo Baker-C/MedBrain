@@ -1,6 +1,7 @@
 """History rendering: the transcript appears only when there is history."""
 
-from retrieval.tools.history import HistoryMessage, build_user_prompt
+from retrieval.contract import HistoryMessage
+from retrieval.query.transcript import build_user_prompt
 
 
 def test_user_prompt_includes_history_transcript() -> None:

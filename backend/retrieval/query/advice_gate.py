@@ -5,26 +5,20 @@ closed: if the call cannot run, the query is refused rather than answered
 ungated.
 """
 
-from dataclasses import dataclass
-
 from openai import OpenAI, OpenAIError
 from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from messages import GATE_UNAVAILABLE, PERSONAL_ADVICE_REFUSAL
 from prompts import ADVICE_GATE
-from retrieval.tools.history import HistoryMessage, build_user_prompt
+from retrieval.contract import HistoryMessage, Refusal
+from retrieval.query.transcript import build_user_prompt
 
 ADVICE_GATE_MODEL = "gpt-5-mini"
 
 
 class GateVerdict(BaseModel):
     personal_advice: bool
-
-
-@dataclass(frozen=True)
-class Refusal:
-    text: str
 
 
 def build_gate_messages(
