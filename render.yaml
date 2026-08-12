@@ -17,7 +17,7 @@ services:
     name: medbrain-backend
     runtime: docker
     plan: free
-    region: oregon # keep this matched to the Supabase project's region
+    region: ohio # matched to the Supabase project's region (us-east-2)
     rootDir: backend
     dockerfilePath: ./Dockerfile
     branch: prod
