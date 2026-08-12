@@ -7,11 +7,14 @@ only comparable when they agree. Callers use the returned client's own
 """
 
 from langchain_openai import OpenAIEmbeddings
+from pydantic import SecretStr
 
 from config import EMBEDDING_DIMENSIONS, EMBEDDING_MODEL
 
 
-def build_embeddings() -> OpenAIEmbeddings:
-    """`text-embedding-3-large` truncated to 1536 dims, per `config`. The API key comes
-    from the environment, the way `langchain-openai` reads it by default."""
-    return OpenAIEmbeddings(model=EMBEDDING_MODEL, dimensions=EMBEDDING_DIMENSIONS)
+def build_embeddings(api_key: str) -> OpenAIEmbeddings:
+    """`text-embedding-3-large` truncated to 1536 dims, per `config`. Built by its caller
+    so the credential stays an explicit input."""
+    return OpenAIEmbeddings(
+        model=EMBEDDING_MODEL, dimensions=EMBEDDING_DIMENSIONS, api_key=SecretStr(api_key)
+    )
