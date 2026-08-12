@@ -1,6 +1,6 @@
 /** Builders for the SSE wire format the backend emits, used to drive a stubbed fetch. */
 
-/** One frame, encoded exactly as `encode_sse` in backend/chat/events.py does. */
+/** One frame, encoded exactly as `encode_sse` in backend/api/sse.py does. */
 export function frame(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
 }

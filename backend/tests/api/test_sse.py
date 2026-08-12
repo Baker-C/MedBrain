@@ -2,8 +2,8 @@
 
 import json
 
-from chat.context import Citation
-from chat.events import DoneEvent, ErrorEvent, SourcesEvent, TokenEvent, encode_sse
+from api.sse import encode_sse
+from chat.contract import Citation, DoneEvent, ErrorEvent, SourcesEvent, TokenEvent
 
 
 def test_sources_frame_carries_the_tag_to_citation_mapping() -> None:

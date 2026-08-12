@@ -1,12 +1,19 @@
 """Per-request dependencies."""
 
 from collections.abc import Iterator
+from typing import cast
 
 import psycopg
 from fastapi import Request
 from psycopg.rows import TupleRow
 
-from api.state import app_clients
+from clients import AppClients
+
+
+def app_clients(request: Request) -> AppClients:
+    """The one place `app.state`'s untyped attributes are narrowed, so no `Any` reaches
+    a caller's signature."""
+    return cast(AppClients, request.app.state.clients)
 
 
 def db_connection(request: Request) -> Iterator[psycopg.Connection[TupleRow]]:

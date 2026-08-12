@@ -10,48 +10,11 @@ A citation is a join: identity (document id, drug) comes from the document, loca
 
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Protocol
 
-from pydantic import BaseModel
-
+from chat.contract import Citation, RetrievedChunk
 from persistence.rows import ChunkRow
 
 TAG_PATTERN = re.compile(r"\[\[(S\d+)\]\]")
-
-
-class CitedDocument(Protocol):
-    """The document fields a citation needs. `DocumentRow` satisfies this structurally,
-    so `chat/` sees only these two and a rename in the row model fails the type check."""
-
-    id: str
-    drug_name: str
-
-
-@dataclass(frozen=True)
-class RetrievedChunk:
-    """One chunk retrieval selected, with the document it belongs to.
-
-    An in-process handoff of rows already validated at the retrieval adapter, so it is
-    a dataclass rather than a model — the same shape `Refusal` and `Proceed` use.
-    """
-
-    chunk: ChunkRow
-    document: CitedDocument
-
-
-class Citation(BaseModel):
-    """One resolved source, sent in the `sources` event and frozen into `messages.sources`.
-
-    Section fields degrade to null on a chunk with no carved section; `page_start` is
-    the guaranteed floor every citation deep-links to.
-    """
-
-    document_id: str
-    drug: str
-    section_number: str | None
-    section_title: str | None
-    page_start: int
 
 
 def tag_for(position: int) -> str:

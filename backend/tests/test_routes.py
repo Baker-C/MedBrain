@@ -61,10 +61,10 @@ def test_an_openai_failure_before_the_stream_is_a_typed_502(
     show — not a stack trace and not a broken stream."""
     monkeypatch.setattr("api.routes.app_clients", lambda request: object())
 
-    async def failing_retrieve(*args: object) -> object:
+    def failing_prepare_turn(*args: object) -> object:
         raise OpenAIError("upstream down")
 
-    monkeypatch.setattr("api.routes.retrieve", failing_retrieve)
+    monkeypatch.setattr("api.routes.prepare_turn", failing_prepare_turn)
     response = client.post(
         f"/conversations/{CONVERSATION_ID}/query", json={"question": "warfarin bleeding risk?"}
     )

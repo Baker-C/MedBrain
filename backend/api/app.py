@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from openai import OpenAIError
 
 from api.routes import router
-from api.state import build_clients
+from clients import build_clients
 from config import load_settings
 
 

@@ -1,5 +1,5 @@
-// Mirrors the backend contract: `chat/events.py` (SSE payloads), `chat/context.py`
-// (Citation), and `persistence/rows.py` (conversations, messages).
+// Mirrors the backend contract: `chat/contract.py` (SSE payloads and Citation) and
+// `persistence/rows.py` (conversations, messages).
 //
 // These are compile-time shapes only — responses are cast, not validated. A backend
 // rename therefore surfaces as a broken render, not a typed error at the boundary.
