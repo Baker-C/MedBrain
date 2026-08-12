@@ -70,7 +70,12 @@ class StoredChunk(BaseModel):
 
 
 def connect(database_url: str) -> psycopg.Connection[TupleRow]:
-    return psycopg.connect(database_url)
+    """Autocommit on purpose: with it, `connection.transaction()` opens a real
+    transaction per document instead of a savepoint inside one implicit run-long
+    transaction. Without it, nothing commits until the connection closes — a crash
+    loses every document — and the session sits idle-in-transaction through each
+    multi-minute extraction."""
+    return psycopg.connect(database_url, autocommit=True)
 
 
 def vector_literal(values: Sequence[float]) -> str:
