@@ -4,9 +4,9 @@ from dataclasses import dataclass
 
 from openai import OpenAI
 
-from retrieval.tools.advice_gate import Refusal, run_advice_gate
-from retrieval.tools.history import HistoryMessage
-from retrieval.tools.query_rewriter import run_query_rewriter
+from retrieval.contract import HistoryMessage, Refusal
+from retrieval.query.advice_gate import run_advice_gate
+from retrieval.query.query_rewriter import run_query_rewriter
 
 
 @dataclass(frozen=True)

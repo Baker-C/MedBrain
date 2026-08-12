@@ -5,9 +5,9 @@ from typing import NoReturn, cast
 from openai import OpenAI, OpenAIError
 
 from messages import GATE_UNAVAILABLE, PERSONAL_ADVICE_REFUSAL
-from retrieval.tools.advice_gate import (
+from retrieval.contract import Refusal
+from retrieval.query.advice_gate import (
     GateVerdict,
-    Refusal,
     interpret_gate_verdict,
     run_advice_gate,
 )

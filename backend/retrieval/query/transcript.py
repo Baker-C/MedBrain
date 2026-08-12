@@ -1,13 +1,6 @@
-"""Conversation history: the shared message shape and its rendering into a prompt."""
+"""Rendering conversation history into a prompt, shared by both query-stage tools."""
 
-from typing import Literal
-
-from pydantic import BaseModel
-
-
-class HistoryMessage(BaseModel):
-    role: Literal["user", "assistant"]
-    content: str
+from retrieval.contract import HistoryMessage
 
 
 def build_user_prompt(query: str, history: list[HistoryMessage]) -> str:
