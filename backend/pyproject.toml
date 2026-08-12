@@ -35,7 +35,7 @@ select = ["E", "F", "I"]
 
 [tool.mypy]
 strict = true
-files = ["api", "chat", "clients.py", "config.py", "conversation", "healthcheck.py", "messages", "persistence", "prompts", "retrieval", "tests"]
+files = ["api", "chat", "clients.py", "config.py", "conversation", "eval", "healthcheck.py", "messages", "persistence", "prompts", "retrieval", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
