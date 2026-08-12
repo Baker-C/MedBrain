@@ -1,10 +1,9 @@
 """The vocabulary retrieval speaks to its callers.
 
 Everything that crosses the package boundary lives here: what goes in
-(`HistoryMessage`), what comes back when the pipeline stops early (`Refusal`), and the
-scored chunk a result is made of.
-Callers import this module and nothing deeper — the stage packages are internal.
-Purely declarative: no I/O, and no dependency beyond the row models.
+(`HistoryMessage`), what comes back (`Refusal | Retrieved`), and the scored chunk a
+result is made of. Callers import this module and nothing deeper — the stage packages
+are internal. Purely declarative: no I/O, and no dependency beyond the row models.
 """
 
 from dataclasses import dataclass
@@ -21,13 +20,6 @@ class HistoryMessage(BaseModel):
 
 
 @dataclass(frozen=True)
-class Refusal:
-    """The pipeline stopped before retrieving anything; `text` is what streams instead."""
-
-    text: str
-
-
-@dataclass(frozen=True)
 class ScoredChunk:
     """A chunk plus what it earned on the way through the pipeline.
 
@@ -40,3 +32,19 @@ class ScoredChunk:
     sparse_rank: int | None
     rrf_score: float
     rerank_score: int | None = None
+
+
+@dataclass(frozen=True)
+class Refusal:
+    """The pipeline stopped before retrieving anything; `text` is what streams instead."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class Retrieved:
+    """What generation answers from: the query actually searched — rewritten or raw —
+    and the chunks that survived, each carrying the scores it earned."""
+
+    query: str
+    chunks: list[ScoredChunk]
