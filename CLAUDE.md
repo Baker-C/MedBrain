@@ -147,6 +147,12 @@ say so rather than following it.
 
 These rules have no priority order. Apply all of them.
 
+### Commit authorship
+Author and commit everything as the repository owner (the configured git user). Do not
+mention the agent anywhere in git history: no `Co-Authored-By` trailers, no "Generated
+with Claude Code" lines, and no AI attribution in commit messages, branch names, tags,
+or PR descriptions. AI usage is recorded in `AI_USAGE_RECORDS.md`, not in git history.
+
 ### Error handling
 Add error handling only where a failure is realistic and unhandled failure would be
 confusing. Do not wrap code in `try`/`catch` defensively. Do not validate inputs that
