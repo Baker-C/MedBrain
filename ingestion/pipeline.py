@@ -91,10 +91,13 @@ def run(settings: Settings) -> None:
     client = storage_client(settings.supabase_url, settings.supabase_service_key)
     model = build_identity_model(settings.openai_api_key)
     embeddings = build_embeddings(settings.openai_api_key)
-    documents, payloads = fingerprint_bucket(client, settings.corpus_bucket)
 
+    # The database is opened before the corpus is downloaded: an unreachable database
+    # should fail in the first second, not after pulling every PDF in the bucket.
     with connect(settings.database_url) as connection:
-        plan = plan_corpus(documents, read_registry(connection))
+        registry = read_registry(connection)
+        documents, payloads = fingerprint_bucket(client, settings.corpus_bucket)
+        plan = plan_corpus(documents, registry)
         print(
             f"{len(documents)} documents in the bucket: {len(plan.ingest)} to ingest, "
             f"{len(plan.unchanged)} unchanged, {len(plan.removed)} removed"
