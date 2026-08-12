@@ -2,14 +2,14 @@
 settings, never read from ambient environment by the tool that uses it.
 
 Each stage's factory still owns its own model choice; this module only supplies the
-credential and holds the results together so a request handler can reach them.
+credential and holds the results together so a caller can reach them. It sits above
+the feature packages and below the API, because the eval harness builds the same
+clients without an app around them.
 """
 
 from dataclasses import dataclass
-from typing import cast
 
 import supabase
-from fastapi import Request
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from openai import OpenAI
 from supabase import Client
@@ -42,9 +42,3 @@ def build_clients(settings: Settings) -> AppClients:
         openai=OpenAI(api_key=settings.openai_api_key),
         storage=supabase.create_client(settings.supabase_url, settings.supabase_service_key),
     )
-
-
-def app_clients(request: Request) -> AppClients:
-    """The one place `app.state`'s untyped attributes are narrowed, so no `Any` reaches
-    a caller's signature."""
-    return cast(AppClients, request.app.state.clients)

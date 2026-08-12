@@ -2,8 +2,8 @@
 
 Non-streaming handlers are plain `def` — FastAPI runs them on its threadpool, which
 is the whole sync/async answer for endpoints that just hit the database. Only the
-query endpoint is async, because it streams; its blocking work is offloaded inside
-`api.query`.
+query endpoint is async, because it streams; its blocking work is `prepare_turn`,
+offloaded in one call.
 """
 
 from uuid import UUID
@@ -14,7 +14,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse, StreamingResponse
 from psycopg.rows import TupleRow
 
-from api.dependencies import db_connection
+from api.dependencies import app_clients, db_connection
 from api.models import (
     ConversationDetail,
     CreateConversationRequest,
@@ -24,14 +24,15 @@ from api.models import (
     retrieval_config,
     traced_chunk,
 )
-from api.query import answer_events, load_retrieved, retrieve, sse_frames
-from api.state import AppClients, app_clients
-from chat.answer import AnswerTrace, trace_answer
+from api.sse import sse_frames
+from chat.collect import collect_answer
+from conversation.history import append_question, conversation_history
+from conversation.persist import persist_on_done
+from conversation.turn import prepare_turn
 from persistence import conversations
 from persistence.documents import fetch_documents
 from persistence.rows import ConversationRow
 from persistence.storage import create_source_url
-from retrieval.contract import HistoryMessage, Refusal, Retrieved
 
 router = APIRouter()
 
@@ -92,48 +93,34 @@ async def query(
     trace: bool = False,
     conn: psycopg.Connection[TupleRow] = Depends(db_connection),
 ) -> StreamingResponse | JSONResponse:
-    """SSE by default; `?trace=true` runs the same pipeline but returns one JSON
-    payload and skips every history write (the eval harness fires ~100+ requests)."""
+    """SSE by default; `?trace=true` runs the same turn but returns one JSON payload
+    and skips every history write (the eval harness fires ~100+ requests)."""
     clients = app_clients(request)
     conversation = await run_in_threadpool(conversations.get_conversation, conn, conversation_id)
     if conversation is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     prior = await run_in_threadpool(conversations.list_messages, conn, conversation_id)
-    history = [HistoryMessage(role=message.role, content=message.content) for message in prior]
-    result = await retrieve(clients, conn, body.question, history, retrieval_config(body))
+    turn = await run_in_threadpool(
+        prepare_turn,
+        clients,
+        conn,
+        body.question,
+        conversation_history(prior),
+        retrieval_config(body),
+    )
 
     if trace:
         return JSONResponse(
-            (await build_trace(clients, conn, result)).model_dump(mode="json")
+            TraceResponse(
+                trace=await collect_answer(turn.events),
+                query=turn.query,
+                retrieval=[traced_chunk(scored) for scored in turn.chunks],
+            ).model_dump(mode="json")
         )
 
-    await run_in_threadpool(
-        conversations.append_message, conn, conversation_id, "user", body.question, None
-    )
+    await run_in_threadpool(append_question, conn, conversation_id, body.question)
     return StreamingResponse(
-        sse_frames(answer_events(clients, conn, conversation_id, result)),
+        sse_frames(persist_on_done(turn.events, conn, conversation_id)),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache"},
-    )
-
-
-async def build_trace(
-    clients: AppClients,
-    conn: psycopg.Connection[TupleRow],
-    result: Refusal | Retrieved,
-) -> TraceResponse:
-    """The trace payload: a refusal is its canned text with nothing retrieved; a
-    retrieved result is the real answer path collected into one payload."""
-    if isinstance(result, Refusal):
-        return TraceResponse(
-            trace=AnswerTrace(answer=result.text, sources={}, tags=[]),
-            query=None,
-            retrieval=[],
-        )
-    retrieved = await run_in_threadpool(load_retrieved, conn, result.chunks)
-    answer = await trace_answer(clients.generation, result.query, retrieved)
-    return TraceResponse(
-        trace=answer,
-        query=result.query,
-        retrieval=[traced_chunk(scored) for scored in result.chunks],
     )

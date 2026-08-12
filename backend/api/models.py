@@ -8,7 +8,7 @@ payload the eval harness consumes.
 
 from pydantic import BaseModel
 
-from chat.answer import AnswerTrace
+from chat.contract import CollectedAnswer
 from persistence.rows import ConversationRow, MessageRow
 from retrieval.config import RetrievalConfig
 from retrieval.contract import ScoredChunk
@@ -89,6 +89,6 @@ class TraceResponse(BaseModel):
     """What `?trace=true` returns: the answer as users would get it, plus the
     retrieval trace the eval harness scores. `retrieval` is empty on a refusal."""
 
-    trace: AnswerTrace
+    trace: CollectedAnswer
     query: str | None
     retrieval: list[TracedChunk]
