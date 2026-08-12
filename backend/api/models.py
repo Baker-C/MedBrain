@@ -42,10 +42,14 @@ def retrieval_config(request: QueryRequest) -> RetrievalConfig:
     )
 
 
-class ConversationDetail(BaseModel):
-    """One conversation with its full message history, oldest first."""
+class ConversationDetail(ConversationRow):
+    """One conversation with its full message history, oldest first.
 
-    conversation: ConversationRow
+    Flat — the conversation's own columns plus `messages` — because that is the shape
+    `frontend/src/api/types.ts` pins (`ConversationDetail extends Conversation`). The
+    client caches details keyed on `detail.id`, so nesting the row breaks the view.
+    """
+
     messages: list[MessageRow]
 
 

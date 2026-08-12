@@ -65,7 +65,7 @@ def get_conversation(
     if conversation is None:
         raise HTTPException(status_code=404, detail="conversation not found")
     return ConversationDetail(
-        conversation=conversation,
+        **conversation.model_dump(),
         messages=conversations.list_messages(conn, conversation_id),
     )
 
