@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     supabase_service_key: str
     database_url: str
     openai_api_key: str
+    frontend_origin: str = "http://localhost:5173"
 
 
 def load_settings() -> Settings:
