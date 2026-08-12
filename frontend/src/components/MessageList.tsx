@@ -1,3 +1,5 @@
+import { useEffect, useRef } from 'react'
+
 import type { ConversationDetail, Message } from '../api/types'
 import type { Answer } from '../state/conversations'
 import { AnswerText } from './AnswerText'
@@ -53,6 +55,13 @@ export function MessageList({
   detail: ConversationDetail
   answer: Answer | undefined
 }) {
+  // Keeps the newest text in view as messages land and tokens stream in.
+  // The optional call also covers jsdom, which has no scrollIntoView.
+  const endRef = useRef<HTMLLIElement>(null)
+  useEffect(() => {
+    endRef.current?.scrollIntoView?.()
+  }, [detail.messages.length, answer?.text])
+
   return (
     <ul aria-label="Messages" className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6">
       {detail.messages.map((message) =>
@@ -63,6 +72,7 @@ export function MessageList({
         ),
       )}
       {answer !== undefined && <StreamingAnswer answer={answer} />}
+      <li ref={endRef} aria-hidden="true" />
     </ul>
   )
 }
