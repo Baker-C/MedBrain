@@ -10,6 +10,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 EMBEDDING_MODEL = "text-embedding-3-large"
 EMBEDDING_DIMENSIONS = 1536
 
+# Fixed, not environment-tunable: the upload script seeds this one private Storage
+# bucket and signed-URL minting reads from it — a mismatch would break every
+# citation link. The 5-minute TTL is a design decision (DESIGN.md): long enough to
+# open a source, short enough that a leaked link goes stale quickly.
+CORPUS_BUCKET = "corpus"
+SIGNED_URL_TTL_SECONDS = 300
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env")
