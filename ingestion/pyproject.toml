@@ -1,0 +1,52 @@
+[project]
+name = "medbrain-ingestion"
+version = "0.1.0"
+description = "MedBrain ingestion: FDA drug-label PDFs from Storage into pgvector."
+requires-python = ">=3.12"
+dependencies = [
+    "langchain-openai",
+    "langchain-text-splitters",
+    # Imported only for `OpenAIError`; every call goes through langchain-openai.
+    "openai",
+    "psycopg[binary]",
+    "supabase",
+    "pydantic",
+    "pydantic-settings",
+]
+
+[dependency-groups]
+# Unstructured hi_res and its CV models: installed only by the ingestion image, which
+# is the only place extraction runs. CI and the hermetic tests never import them, so
+# they never pay the download.
+extraction = [
+    "unstructured[pdf]",
+]
+dev = [
+    "ruff",
+    "mypy",
+    "pytest",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+strict = true
+files = ["."]
+
+# Unstructured ships no type information and is absent outside the ingestion image.
+# `extraction.py` re-types its output at the boundary, so the untyped import stops there.
+[[tool.mypy.overrides]]
+module = ["unstructured.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
