@@ -10,7 +10,7 @@ export type Segment = { kind: 'text'; text: string } | { kind: 'citation'; tag: 
 
 /** Mirrors TAG_PATTERN in backend/chat/context.py. */
 const COMPLETE_TAG = /\[\[(S\d+)\]\]/g
-const TRAILING_PARTIAL_TAG = /\[\[?S?\d*$/
+const TRAILING_PARTIAL_TAG = /\[\[?S?\d*\]?$/
 
 /** The text safe to show now, and the suffix that may still turn into a tag. */
 export function splitHeldSuffix(text: string): { ready: string; held: string } {
