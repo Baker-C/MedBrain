@@ -254,8 +254,7 @@ and the AI's objection together. Separately, the user chose the batched
 `embed_texts(client, texts)` shape over a query-only embedder so ingestion imports this
 function rather than defining the constants a second time.
 
-**3. Diff and commit:** commit pending (branch `worktree-retrieval-toolbox`, uncommitted
-at time of writing).
+**3. Diff and commit:** carried by commit `766856c` on `retrieval-toolbox` (PR #10).
 
 ```diff
 --- a/backend/config.py
@@ -301,8 +300,11 @@ keyword parameters it stands in for, which additionally makes the fake assert th
 call shape instead of swallowing any arguments. No `Any` annotation remains in
 `retrieval/` or `tests/`.
 
-**3. Diff and commit:** commit pending (branch `worktree-retrieval-toolbox`, uncommitted
-at time of writing).
+**3. Diff and commit:** the corrected form is what reached the history — `8ebba12`
+(chunk_rows, dense, sparse), `73cb7e0` (pipeline), `2bdcab4` (the embedder test), all on
+`retrieval-toolbox` (PR #10). The `Any` version never appears as a diff: it existed only
+in the working tree, and the branch's commits were authored afterwards as a clean
+sequence. Recorded here precisely because the history cannot show it.
 
 ```diff
 --- a/backend/retrieval/tools/chunks.py      (also dense_search.py, sparse_search.py, pipeline.py)
@@ -349,8 +351,9 @@ code, so run-to-run stability never depended on the sampler. This is a case wher
 AI's own earlier design text was wrong about the provider's API and the code would have
 been written to match it if it had not been checked.
 
-**3. Diff and commit:** commit pending (branch `worktree-retrieval-toolbox`, uncommitted
-at time of writing). `DESIGN.md` is untracked by design.
+**3. Diff and commit:** carried by commit `4701cb4` on `retrieval-toolbox` (PR #10). As
+with the entry above, the `temperature=0` version never reached the history — the
+reranker was first committed already corrected. `DESIGN.md` is untracked by design. `DESIGN.md` is untracked by design.
 
 ```diff
 --- a/DESIGN.md
@@ -412,7 +415,7 @@ async def stream_answer(model: BaseChatModel, question: str, context: str) -> As
             yield chunk.text
 ```
 
-Commit: pending.
+Commits: `5e02e26` (the dependency), `614329e` (the generation call).
 
 ---
 
@@ -459,7 +462,7 @@ class RetrievedChunk:
 
 Verified with a throwaway module that `retrieved.document.ingested_at` inside `chat/`
 raises mypy `"CitedDocument" has no attribute "ingested_at"` while a `DocumentRow` passes
-in cleanly. Commit: pending.
+in cleanly. Commit: `c1276d4`.
 
 ---
 
@@ -494,7 +497,7 @@ class Citation(BaseModel):
     page_start: int
 ```
 
-Commit: pending.
+Commit: `c1276d4`.
 
 ---
 
@@ -524,8 +527,11 @@ wrappers, including hand-written re-sorting of the batch by each item's `index`.
 and the ordering guarantee is the library's, so the wrappers were deleted rather than
 kept — the embedder tool is now the factory alone.
 
-**3. Diff and commit:** commit pending (branch `worktree-retrieval-toolbox`, uncommitted
-at time of writing).
+**3. Diff and commit:** carried by commits `4701cb4` (reranker), `2bdcab4` (embedder),
+on `retrieval-toolbox` (PR #10). The `langchain-openai` dependency is **not** carried by
+this branch: the parallel chat session added the identical line in PR #9 (`5e02e26`)
+while this work was in flight, and the duplicate addition collapsed to nothing when
+this branch was rebased onto it.
 
 ```diff
 --- a/backend/retrieval/tools/reranker.py
@@ -573,6 +579,470 @@ at time of writing).
 +    "langchain-openai",
      "openai",
 ```
+
+---
+
+## Ingestion location: a backend package with a dependency group → a standalone project
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**1. What it ended up as:** the top-level `ingestion/` project — its own
+`pyproject.toml`, `uv.lock`, `Dockerfile`, and `tests/`, beside `backend/` and
+`frontend/`.
+
+**2. The change and the reasoning:** the AI proposed keeping ingestion at
+`backend/ingestion/` and isolating `unstructured[pdf]` in a non-default dependency
+group, on the grounds that one toolchain is simpler and the backend image just skips the
+group. The user rejected the premise: ingestion is never called through the API, so it
+does not belong inside the API project, and if it ever needs exposing it becomes its own
+service. Reasoning the user gave: "We don't need ingestion on the backend since we never
+call it through API." The AI agreed on review and added a second argument the user had
+not raised — a separate lockfile makes the lean-backend property structural rather than
+procedural, since the backend image then *cannot* resolve `unstructured` at all. The AI
+did push back on one part and the user accepted it: the schema keeps a single owner in
+`backend/persistence/migrations/` rather than being duplicated or split.
+
+**3. Diff and commit:** deletion of `backend/Dockerfile.ingestion` and
+`backend/ingestion/{__init__,__main__}.py`, removal of `"ingestion"` from the backend
+mypy `files` list, and the new `ingestion/` tree.
+
+```diff
+--- a/backend/pyproject.toml
++++ b/backend/pyproject.toml
+-files = ["api", "chat", "config.py", "healthcheck.py", "ingestion", "messages", "persistence", "prompts", "retrieval", "tests"]
++files = ["api", "chat", "config.py", "healthcheck.py", "messages", "persistence", "prompts", "retrieval", "tests"]
+```
+
+Commit: pending.
+
+---
+
+## Document identity: a hand-authored manifest → one LLM extraction call per document
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**1. What it ended up as:** `ingestion/identity.py` — a single `gpt-5-mini`
+structured-output call per new or changed document returning `drug_name`,
+`manufacturer`, and `formulation`, raising `IngestionError` on failure.
+
+**2. The change and the reasoning:** `documents.drug_name` and `manufacturer` are
+`NOT NULL`, and nothing in the design said where ingestion gets them. The AI recommended
+a hand-authored manifest checked into the repo and keyed by object key — deterministic,
+free, hermetically testable, and loud about unknown documents. The user chose LLM
+extraction instead. The manifest would have made the bucket only half the source of
+truth: the design has ingestion reconcile against the bucket, and a checked-in list of
+what the bucket contains is a second, drift-prone copy of that fact. The AI kept the
+failure direction it had argued for — extraction failure aborts the document rather than
+falling back to the filename, matching the way unresolvable pages already fail.
+
+**3. Diff and commit:** `ingestion/identity.py` and
+`ingestion/prompts/document_identity.py`, both new files; the rejected shape was a
+design proposal and never written.
+
+Commit: pending.
+
+---
+
+## Heading detection: a word-count floor → a character floor plus a section-number bound
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**1. What it ended up as:** the guard conditions in `carving.numbered_heading` —
+`MIN_HEADING_TITLE_CHARS = 3` and `MAX_SECTION_NUMBER = 17`.
+
+**2. The change and the reasoning:** the AI wrote `if len(title.split()) < 2: return
+None` to stop carton lines such as `1 mg:` from being read as section headings, and the
+rule looked reasonable in isolation. Run against the corpus it rejected
+`5.1 Hemorrhage`, `11 DESCRIPTION`, and `5.4 Proarrhythmia`: single-word section titles
+are ordinary in a PLR label. The measurable damage was 12–16 detected top-level sections
+per document against a true 15–16, and roughly a quarter of all subsections silently
+dropped — which would have shipped as missing citations, not as an error. Replaced by a
+3-character floor plus a bound of 1–17 on the section number, since PLR defines exactly
+those sections; the carton lines it was written to reject (`1 mg:`, `10 mg White (dye`,
+`30 Tablets`) are all still rejected, by the terminator rule, the uppercase-remainder
+rule, and the bound respectively.
+
+**3. Diff and commit:**
+
+```diff
+--- a/ingestion/carving.py
++++ b/ingestion/carving.py
+-MIN_HEADING_WORDS = 2
++MIN_HEADING_TITLE_CHARS = 3
++MAX_SECTION_NUMBER = 17
+@@
+-    if len(title.split()) < MIN_HEADING_WORDS:
++    if len(title) < MIN_HEADING_TITLE_CHARS:
+         return None
+     major, minor, _ = match.groups()
++    if not 1 <= int(major) <= MAX_SECTION_NUMBER:
++        return None
+```
+
+Commit: pending.
+
+---
+
+## Section ordering: a monotonic-numbering guard, proposed and rejected before shipping
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**1. What it ended up as:** nothing — no ordering guard exists in `carving.py`.
+
+**2. The change and the reasoning:** the AI proposed accepting a top-level heading only
+when its number exceeded the last accepted one, arguing that PLR sections run 1→17 in
+regulatory order so monotonicity is a free correctness check against stray matches.
+Measured against the corpus, 6 of 17 documents are non-monotonic in extraction order, so
+the guard would have rejected real headings and dropped real sections. Rejected before
+any of it was written into the module. The false positives it was meant to catch are
+handled by the number bound instead, which is checked per heading and needs no state.
+
+**3. Diff and commit:** no diff — the rule was measured and abandoned at the probe stage.
+The evidence is recorded in `DESIGN_RECORDS.md` under "Carving boundaries".
+
+Commit: n/a.
+
+---
+
+## Table page spans: inferred from the next element → carried on the element
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**1. What it ended up as:** `PageElement.page_start` / `PageElement.page_end`, set equal
+by extraction and widened by `cleaning.stitch_cross_page_tables`.
+
+**2. The change and the reasoning:** the AI's first version gave `PageElement` a single
+`page` and recovered a stitched table's end page with a helper that looked ahead for the
+next element on a later page. That is a guess, and it is wrong exactly when a table is
+the last block on its page — which is the common case for a table long enough to have
+been split across pages in the first place. Since page is the schema's `NOT NULL`
+citation floor, an inferred value is the wrong shape of answer: the element now carries
+the span it actually covers, and the lookahead helper was deleted rather than fixed.
+
+**3. Diff and commit:**
+
+```diff
+--- a/ingestion/cleaning.py
++++ b/ingestion/cleaning.py
+-def table_page_span(elements: Sequence[PageElement], index: int) -> int:
+-    """Last page a stitched table covers, read back from the elements that follow it."""
+-    table = elements[index]
+-    following = next((e for e in elements[index + 1 :] if e.page > table.page), None)
+-    return table.page if following is None else following.page - 1
+```
+
+Commit: pending.
+
+---
+
+## Retrieval file structure: flat `tools/` bag → stage packages
+
+**Timestamp:** 2026-08-12 12:06 -07:00
+
+**1. What it ended up as:** the `retrieval/` package layout — `contract.py` plus the
+`query/`, `search/`, and `ranking/` stage packages, with `tests/retrieval/` mirroring it.
+
+**2. The change and the reasoning:** the AI built the retrieval toolbox as nine flat
+modules in `retrieval/tools/`, following the project's recorded "each tool self-contained
+in `retrieval/tools/`" convention literally. It applied that convention to things that
+were not tools: `chunks.py` accumulated a SQL fragment, a row reader, and the
+`ScoredChunk` domain type, and `history.py` mixed a boundary-crossing type with a
+prompt helper. The AI wrote both files that way without flagging the mismatch, and
+`Refusal` was left defined inside the advice-gate tool while being half of the pipeline's
+public return type.
+
+The user rejected the structure on inspection — "the tools and file structure of retrieval
+could use some cleaning up" — and asked for a plan rather than an immediate change. Given
+three options, the user chose the deepest one: retire `tools/` entirely in favour of
+folders named for the pipeline stages, accepting that this supersedes their own earlier
+`tools/` naming convention. The AI's own recommendation had been the same shape, but the
+AI had not raised the problem on its own in the two sessions it spent writing those files.
+
+**3. Diff and commit:** carried by commit `6e6fd89` on `retrieval-toolbox` (PR #10) — the
+first commit on the branch, deliberately pure motion so the restructure reads as a
+rename-only diff. The flat `tools/` layout it replaced exists on `main`, not in this
+branch's history. Motion only — no behavior changed, all 33 tests pass before and
+after.
+
+```diff
+ retrieval/
+-  tools/
+-    advice_gate.py  chunks.py      dense_search.py  embedder.py  fusion.py
+-    history.py      query_rewriter.py  reranker.py  sparse_search.py
++  contract.py        HistoryMessage, ScoredChunk, Refusal, Retrieved
++  query/
++    advice_gate.py  query_rewriter.py  transcript.py
++  search/
++    embedder.py     dense.py  sparse.py  chunk_rows.py
++  ranking/
++    fusion.py       reranker.py
+--- a/backend/retrieval/pipeline.py
++++ b/backend/retrieval/pipeline.py
+-from retrieval.tools.advice_gate import Refusal, run_advice_gate
+-from retrieval.tools.chunks import ScoredChunk
+-from retrieval.tools.dense_search import run_dense_search
+-from retrieval.tools.fusion import fuse_rankings
+-from retrieval.tools.history import HistoryMessage
+-from retrieval.tools.query_rewriter import run_query_rewriter
+-from retrieval.tools.reranker import RerankerModel, run_reranker
+-from retrieval.tools.sparse_search import run_sparse_search
++from retrieval.contract import HistoryMessage, Refusal, Retrieved, ScoredChunk
++from retrieval.query.advice_gate import run_advice_gate
++from retrieval.query.query_rewriter import run_query_rewriter
++from retrieval.ranking.fusion import fuse_rankings
++from retrieval.ranking.reranker import RerankerModel, run_reranker
++from retrieval.search.dense import run_dense_search
++from retrieval.search.sparse import run_sparse_search
+```
+
+---
+
+## Ingestion's OpenAI adapters: raw SDK → `langchain-openai`
+
+**Timestamp:** 2026-08-12 12:01 -07:00
+
+**1. What it ended up as:** `ingestion/identity.py` built on
+`ChatOpenAI.with_structured_output(DocumentIdentity)` and `ingestion/embedding.py` built
+on `OpenAIEmbeddings`, both injected into `ingest_document` as
+`BaseChatModel` / `Embeddings`.
+
+**2. The change and the reasoning:** the AI wrote both adapters on the raw OpenAI SDK —
+`client.chat.completions.parse` and `client.embeddings.create` with a hand-rolled 64-item
+batching loop — mirroring the advice gate and query rewriter, which were the only
+examples in the repo at the time. Between that and this check, PR #9 merged the one-rule
+LangChain scope, which names `ChatOpenAI` for every LLM call and `OpenAIEmbeddings` for
+"both ingestion and query embedding". The user asked for the branch to be checked against
+the new `main`; the adapters were the divergence. Rewritten to the rule rather than left
+for a later sweep, because the code had not shipped and leaving it would have widened a
+migration debt that already covers two merged tools. The batching loop was deleted rather
+than ported — the client does it — but its length check was kept, since embeddings are
+zipped with chunks at insert time and a short response would mispair rather than fail.
+
+**3. Diff and commit:**
+
+```diff
+--- a/ingestion/embedding.py
++++ b/ingestion/embedding.py
+-from openai import OpenAI
+-EMBEDDING_BATCH = 64
+-def embed_texts(client: OpenAI, texts: Sequence[str]) -> list[list[float]]:
+-    vectors: list[list[float]] = []
+-    for start in range(0, len(texts), EMBEDDING_BATCH):
+-        batch = list(texts[start : start + EMBEDDING_BATCH])
+-        response = client.embeddings.create(
+-            model=EMBEDDING_MODEL, dimensions=EMBEDDING_DIMENSIONS, input=batch
+-        )
+-        vectors.extend(item.embedding for item in sorted(response.data, key=lambda d: d.index))
++from langchain_core.embeddings import Embeddings
++from langchain_openai import OpenAIEmbeddings
++def embed_texts(embeddings: Embeddings, texts: Sequence[str]) -> list[list[float]]:
++    if not texts:
++        return []
++    vectors = embeddings.embed_documents(list(texts))
+     if len(vectors) != len(texts):
+         raise IngestionError(f"Embedded {len(vectors)} of {len(texts)} chunks.")
+     return vectors
+
+--- a/ingestion/identity.py
++++ b/ingestion/identity.py
+-    try:
+-        completion = client.chat.completions.parse(
+-            model=IDENTITY_MODEL, messages=..., response_format=DocumentIdentity
+-        )
+-    except OpenAIError as error:
+-        raise IngestionError(...) from error
+-    identity = completion.choices[0].message.parsed
+-    if identity is None or not identity.drug_name.strip() or ...:
++    structured = model.with_structured_output(DocumentIdentity)
++    try:
++        parsed = structured.invoke(build_identity_messages(elements))
++    except OpenAIError as error:
++        raise IngestionError(...) from error
++    if not isinstance(parsed, DocumentIdentity):
++        raise IngestionError(...)
+```
+
+Commit: pending.
+
+---
+
+## Pre-push reconciliation for PR #10
+
+**Timestamp:** 2026-08-12 12:31 -07:00
+
+Not an override — a note on how to read the five entries above against the branch history.
+
+The `retrieval-toolbox` branch was committed as an authored sequence of eight commits
+*after* the work was finished, ordered by concern rather than by the order things actually
+happened: restructure → dependency → config → embedder → search legs → fusion → reranker
+→ composition. Each commit was verified green (ruff, strict mypy, pytest) with the working
+tree at that commit's state, not merely at the tip.
+
+The consequence for these records: several corrections logged above are **invisible in the
+history**, because the corrected form is what was committed. The `Any` annotations, the
+`temperature=0` reranker call, the raw-SDK clients, and the flat `tools/` folder all
+existed in the working tree and none of them reached a commit. That is the intended
+division — `DESIGN_RECORDS.md` and this file carry what the diff cannot.
+
+Commit map for the branch:
+
+| Commit | Concern |
+|---|---|
+| `6e6fd89` | Restructure retrieval into pipeline stages with a shared contract |
+| `766856c` | Pin the embedding model and width as shared constants |
+| `b98e282` | Retrieval configuration: one object for every switch and cut-off |
+| `2bdcab4` | Embedder: the one configured embeddings client |
+| `8ebba12` | Chunk search: dense vector and sparse full-text legs |
+| `2bd941e` | Rank fusion: RRF across the two candidate legs |
+| `4701cb4` | LLM reranker: batched pointwise scoring, sorted in code |
+| `73cb7e0` | Compose the full retrieve path behind the config toggles |
+
+---
+
+## PR #10 rebased onto main; recorded commits remapped
+
+**Timestamp:** 2026-08-12 12:19 -07:00
+
+The SHAs recorded in the entries above were rewritten once, and the note explaining the
+commit map now describes the post-rebase history. What happened:
+
+PR #9 (the chat layer) merged to `main` while this branch was being committed, and it had
+independently added `langchain-openai` to `backend/pyproject.toml` — the same one-line
+change this branch made for the reranker and embeddings clients. `retrieval-toolbox` was
+**rebased** onto the new `main` rather than merged, to keep the eight-commit sequence
+linear and matching how every previous feature branch in this repo reads.
+
+Three consequences, all recorded rather than quietly absorbed:
+
+1. **Every SHA above changed.** The originals (`2f82cc6` … `06db6e3`) exist in no remote
+   branch; the mapping in the reconciliation note is the post-rebase one.
+2. **One commit's message became false and was rewritten.** "Pin the embedding model and
+   width as shared constants" originally also added the `langchain-openai` dependency.
+   After the rebase that hunk collapsed to nothing, so the commit changes only
+   `config.py`, and the paragraph claiming the dependency was removed from its message.
+   The message now describes exactly what the commit does.
+3. **The only real conflict was `prompts/__init__.py`** — the chat session added
+   `GROUNDED_ANSWER` and this branch added `RERANK` to the same `__all__`. Resolved by
+   keeping both. `chat/` turned out not to import `retrieval` at all (it defines its own
+   `RetrievedChunk` Protocol), so the package restructure did not touch it.
+
+**Verified after the rebase:** each of the eight commits was checked out in turn and
+passes ruff, strict mypy, and pytest on its own — not merely at the tip. CI on PR #10
+passes both the backend and frontend jobs.
+
+---
+
+## Eval harness architecture: HTTP trace-mode driver → in-process package
+
+**Timestamp:** 2026-08-12 13:00 -07:00
+
+**1. What it ended up as:** the eval harness's architecture and location —
+`backend/eval/`, run in-process via `python -m eval`.
+
+**2. The change and the reasoning:** the AI's plan (Build-Spec §10, and the first
+harness plan presented this session) had the harness as an external script under
+`scripts/verification/` driving the deployed query endpoint's `?trace=true` mode over
+HTTP. The user rejected the premise — the harness should not rely on the backend being
+up to run. Redesigned to in-process: the harness imports the retrieval/chat core
+directly (`run_retrieval()`, the chunk→document join, `trace_answer()`), opens its own
+psycopg connection and model clients, and needs no server, no HTTP client, and no
+endpoint to exist. It stays typed end to end instead of parsing JSON back into restated
+shapes, and the query endpoint comes off the harness's critical path entirely. Location
+moved into the backend so the imports are native (`healthcheck.py` precedent:
+backend-resident, locally run, excluded from the deployed image).
+
+**3. Diff and commit:** the new `backend/eval/` package (contracts + scoring + tests,
+written directly in the in-process form — the rejected HTTP shape was design, not code,
+so no prior version exists to diff against) and DESIGN.md's eval-harness section
+rewrite. Commit: pending.
+
+---
+
+## Eval suite: AI-drafted, verified against extracted label text, pending owner review
+
+**Timestamp:** 2026-08-12 13:58 -07:00
+
+**Tool use, disclosed:** the 18 question/expected-answer pairs in `backend/eval/suite.py`
+were drafted by Claude Code at the owner's direction ("draft all 18 and justify them"),
+not hand-written first. The assignment requires a test set "you author yourself," so this
+is recorded explicitly: every case's expected documents, section numbers, and expected
+answer were verified during drafting against pypdf extractions of the actual corpus PDFs
+(quotes retained in the session record), and the owner reviews, edits, and takes
+ownership of the set before it is used for a graded run. Verification also surfaced
+corpus facts recorded in `DESIGN_RECORDS.md` (Warfarin_2 numbering misalignments, the
+amiodarone label being the IV formulation, the absence proofs behind the three
+unanswerables). Commit: pending.
+
+## Three corrections to the AI-built frontend data layer (PR #11)
+
+**Timestamp:** 2026-08-12 13:19 -07:00
+
+A review of the merged frontend data layer (PR #11, itself AI-generated in a parallel
+session) against the backend SSE contract found three defects. All three were fixed on
+`worktree-frontend-stream-fixes` and shipped as PR #15.
+
+### 1. Sentinel-withholding regex
+
+**What it ended up as:** the `TRAILING_PARTIAL_TAG` pattern in `frontend/src/lib/sentinels.ts`.
+
+**The change and the reasoning:** `/\[\[?S?\d*$/` -> `/\[\[?S?\d*\]?$/`. The AI-written
+pattern withheld `[[`, `[[S`, `[[S1` at a streaming boundary but not `[[S1]` — a token
+split between the two closing brackets flashed the literal sentinel on screen for one
+frame, violating the module's own stated contract ("it never flashes on screen as
+literal text"). The optional trailing bracket closes the hole; a `'[[S1]'` case was
+added to the existing withholding test.
+
+**Diff (commit `336ffb0`):**
+```diff
+-const TRAILING_PARTIAL_TAG = /\[\[?S?\d*$/
++const TRAILING_PARTIAL_TAG = /\[\[?S?\d*\]?$/
+```
+
+### 2. Auto-scroll during streaming
+
+**What it ended up as:** a bottom-anchor `useEffect` in `frontend/src/components/MessageList.tsx`.
+
+**The change and the reasoning:** the AI-built message list had no scroll anchoring, so
+once an answer grew past the fold, tokens streamed in below the visible area and the
+user had to chase them. An empty `<li ref={endRef}>` plus
+`endRef.current?.scrollIntoView?.()` keyed on message count and answer text keeps the
+newest text in view. The second optional call is deliberate: jsdom implements no
+`scrollIntoView`, and the first run without the guard crashed two existing ChatArea
+tests.
+
+**Diff (commit `ca41b5a`):** adds the ref/effect and the anchor `<li>`; no lines removed.
+
+### 3. Partial-answer preservation
+
+**What it ended up as:** a stalled-answer commit step in `ask()` in
+`frontend/src/state/ConversationStore.tsx`.
+
+**The change and the reasoning:** a failed stream kept its partial text labeled
+"incomplete" in `answers[conversationId]` — but the next `ask` in that conversation
+dispatched `answer/started`, overwriting it before it ever reached the transcript. The
+one honest copy of the partial answer silently vanished, undercutting the store's own
+comment that hiding partial text "is less honest than showing it". `ask()` now commits
+a non-empty incomplete answer as an assistant message (text + sources snapshot) before
+starting the next stream, reusing the existing `answer/completed` action.
+
+**Diff (commit `f35065f`):**
+```diff
++    // A partial answer left by a failed stream would be overwritten by the next
++    // `answer/started`; keep what arrived by committing it to the transcript first.
++    const stalled = state.answers[conversationId]
++    if (stalled !== undefined && stalled.status === 'incomplete' && stalled.text !== '') {
++      dispatch({
++        type: 'answer/completed',
++        conversationId,
++        message: localMessage(conversationId, 'assistant', stalled.text, stalled.sources),
++      })
++    }
+```
+
+Left unfixed on purpose (judged minor for a demo): a fast double-Enter during
+conversation creation can create two conversations; asking in a conversation whose
+detail fetch failed streams invisibly; `select()` reads its cache check from a stale
+closure and can double-fetch.
 
 ---
 
@@ -722,96 +1192,72 @@ the two sides aligned.
 ```
 
 
-## Backend container CMD — port binding and signal handling
+## Answer-path refactor: the composition layer the plan named, and one correction
 
-**Timestamp:** 2026-08-12 15:04 -07:00
+**Timestamp:** 2026-08-12 14:30 -07:00
 
-**What it ended up as:** the backend Dockerfile's `CMD`, plus a `PATH` line above it.
+**AI tool:** Claude Code (Opus 5), used to audit the chat/messages/persistence flows
+and execute the resulting refactor.
 
-**The change and the reasoning.** The AI-written Dockerfile ended in an exec-form
-`CMD ["uv", "run", "--no-sync", "uvicorn", ..., "--port", "8000"]`. Two faults surfaced
-only when it was pointed at Render. First, the port is hardcoded, and Render injects the
-port to bind as `$PORT` — but the exec form does not go through a shell, so switching the
-literal to `$PORT` would have handed uvicorn the four-character string `$PORT`. Second,
-and less visible: `uv run` spawns uvicorn as a child process, so `SIGTERM` sent to the
-container to drain a deploy would stop at `uv` and never reach the server, making every
-redeploy wait out the kill timeout.
+**1. Scope of the audit was narrowed against the AI's first read.** Asked to find what
+was "messy" across chat, messages, and persistence, the useful finding was that
+`persistence/`, `messages/`, `chat/context.py`, and `chat/generation.py` were already
+clean — the mess was entirely *composition* duplicated across callers, and it lived
+mostly in `api/`, which was not named in the request. The plan was written against the
+evidence (four copies of one branch, two copies of one fold) rather than the named
+directories, and reported that the named modules were fine. Recorded because "audit
+these three things" would have produced three sets of cosmetic edits and left the
+actual duplication untouched.
 
-The first draft of the fix only addressed the port, switching to shell form. Docker's own
-`JSONArgsRecommended` warning named the signal problem, which was then fixed properly:
-put the synced venv on `PATH` so uvicorn is invoked directly with no `uv` wrapper, and
-prefix the command with `exec` so the shell replaces itself with uvicorn. Verified by
-running the image with `PORT=10000` — uvicorn logs `Started server process [1]`, `/health`
-returns 200, and `docker stop -t 30` completes in 1.2 s rather than timing out.
+**2. `conversation/` as a new package, not `chat/pipeline.py`.** The AI's first
+instinct was to keep the package count down by putting the composition in `chat/`. That
+was rejected before implementing: it makes `chat/` import `retrieval.contract`, which
+turns a self-contained generation package into a composer and inverts the dependency
+direction `retrieval/` had already established. Both options were put to the user with
+a recommendation; the new package was chosen. See `DESIGN_RECORDS.md` for the decision.
 
-**The code diff and its commit.** Commit: pending (`prod` branch, Render deployment).
+**3. A layering inversion the refactor introduced, caught and fixed mid-execution.**
+`conversation/turn.py` was first written importing `AppClients` from `api/state.py` —
+so the composition layer depended on the web layer, backwards. Fixed by moving the
+composition root to `clients.py` at the backend root, leaving `app_clients(request)` in
+`api/dependencies.py`. This also fixed a pre-existing inversion the move surfaced:
+`eval/` had been importing `build_clients()` from `api.state` despite never serving
+HTTP. Worth recording as the general shape of the mistake — a refactor that moves code
+into a new layer will happily carry an old import with it, and the import is what tells
+you the layer is wrong.
 
-```diff
- COPY pyproject.toml uv.lock ./
- RUN uv sync --frozen --no-dev
+**4. Formatting left alone deliberately.** `ruff format --check` flagged six files;
+five were pre-existing and CI does not run the formatter. Only the one file this work
+created was formatted, rather than taking the "while we're here" reformat.
 
-+# Put the synced venv on PATH so uvicorn is called directly rather than through
-+# `uv run`, which would sit between the container and its process as an extra parent.
-+ENV PATH="/app/.venv/bin:$PATH"
-+
- COPY . .
+**Commit:** c231b77 (PR #17). Living-document updates are not in that commit; see the entry note.
 
- EXPOSE 8000
--CMD ["uv", "run", "--no-sync", "uvicorn", "api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
-+# Shell form so $PORT expands - Render injects the port to bind, and the exec form
-+# would hand uvicorn the literal string "$PORT". `exec` then replaces the shell, so
-+# uvicorn is PID 1 and receives the SIGTERM Render sends to drain a deploy.
-+CMD exec uvicorn api.app:create_app --factory --host 0.0.0.0 --port ${PORT:-8000}
-```
 
-## Frontend build guard for a missing backend URL
+## Rebase onto #16: the pre-stream failure test repointed at `prepare_turn`
 
-**Timestamp:** 2026-08-12 15:04 -07:00
+**Timestamp:** 2026-08-12 14:52 -07:00
 
-**What it ended up as:** a production-build assertion in `frontend/vite.config.ts`.
+**AI tool:** Claude Code (Opus 5).
 
-**The change and the reasoning.** `API_BASE_URL` was AI-written as a bare read of
-`import.meta.env.VITE_API_BASE_URL` typed `string`. Running Render's build command
-locally with the variable unset showed the failure mode: the build succeeds, TypeScript
-is satisfied because the declared type lies, and the shipped bundle requests
-`undefined/conversations`. On a deploy host that means a green build and an app that is
-broken only in the browser.
+`api-contract-fixes` (#16) merged to `main` while the answer-path refactor (#17) was
+being built, so the refactor branch was rebased onto it. Both of #16's changes survive
+untouched — `ConversationDetail` stays flat, and the `OpenAIError` -> 502 handler stays
+wired — because the refactor's diff never touched those regions.
 
-Rejected: throwing at module load in `endpoints.ts`. It surfaces the same fault one layer
-later — the deploy still reports success and the failure still appears only when a user
-opens the page. The check belongs where it can fail the build, so it went into
-`vite.config.ts` guarded on `command === 'build'`, leaving `npm run dev` (which reads
-`.env`) and Vitest (which injects the variable in `test.env`) untouched. `loadEnv` is
-merged with `process.env` so a dashboard-set variable and a `.env` file both satisfy it.
-CI's build step now passes a placeholder URL, since CI only proves the bundle compiles.
+One test did not survive, and CI caught it rather than review:
+`tests/test_routes.py::test_an_openai_failure_before_the_stream_is_a_typed_502`
+monkeypatched `api.routes.retrieve` to force a failure before the stream opens. That
+function no longer exists; the handler now makes a single blocking call to
+`prepare_turn`. The test was repointed at `api.routes.prepare_turn` and its fake changed
+from `async def` to plain `def`, since `prepare_turn` is synchronous and offloaded with
+`run_in_threadpool`. The assertion is unchanged, so it still proves the same thing: a
+model failure before any token flows is an HTTP 502 the UI can render, not a broken
+stream.
 
-Verified: build without the variable exits 1; build with it emits `dist/`; lint,
-typecheck, and all 30 frontend tests pass.
+Recorded because it is the predictable cost of the refactor's central move. Collapsing
+four call paths into one function means anything that reached into an intermediate step
+by name has to be repointed, and a monkeypatched test is exactly that kind of reach.
+The alternative reading — that the test was "broken by" the refactor — would be wrong:
+the test's subject (the 502 contract) is intact, only its seam moved.
 
-**The code diff and its commit.** Commit: pending (`prod` branch, Render deployment).
-
-```diff
-+import { loadEnv } from 'vite'
- import { defineConfig } from 'vitest/config'
-
-+/**
-+ * Fail the build when the backend URL is missing, rather than shipping a bundle that
-+ * requests `undefined/conversations`. Without this the deploy host builds green and
-+ * the app breaks only in the browser.
-+ */
-+function requireApiBaseUrl(mode: string): void {
-+  const env = { ...loadEnv(mode, process.cwd(), 'VITE_'), ...process.env }
-+  if (!env.VITE_API_BASE_URL) {
-+    throw new Error('VITE_API_BASE_URL is not set - see frontend/.env.example')
-+  }
-+}
-+
--export default defineConfig({
--  plugins: [react(), tailwindcss()],
--  ...
--})
-+export default defineConfig(({ command, mode }) => {
-+  if (command === 'build') requireApiBaseUrl(mode)
-+  return { plugins: [react(), tailwindcss()], ... }
-+})
-```
+**Commit:** c231b77 (PR #17).

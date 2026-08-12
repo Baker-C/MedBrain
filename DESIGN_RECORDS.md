@@ -1525,6 +1525,469 @@ candidates out reordered, fused order preserved on any failure. Only the client 
 
 ---
 
+## Ingestion is its own top-level project, not a backend package
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**Decision:** ingestion moves out of `backend/ingestion/` to a top-level `ingestion/`
+beside `backend/` and `frontend/`, with its own `pyproject.toml`, lockfile, Dockerfile,
+and test suite. `backend/Dockerfile.ingestion` and the `backend/ingestion/` stub are
+deleted.
+
+**Why:** no API path reaches ingestion and the backend never imports it — Build-Spec §9
+already said the two "meet only at Supabase", while the directory tree said they were
+one program. Three concrete differences back the split: dependency profile (CV model
+weights vs. a lean FastAPI image), runtime (run-once local batch vs. hosted service),
+and credentials (Storage read + Postgres write vs. Postgres read + signed-URL minting).
+A separate lockfile makes the lean-backend guarantee structural: the backend image
+*cannot* pull `unstructured` in, rather than merely not being asked to.
+
+**Rejected:**
+
+1. **`backend/ingestion/` with a dependency group.** The arrangement that existed. Keeps
+   one toolchain, but the leanness guarantee then rests on every future `uv sync`
+   remembering the right flag.
+2. **A shared `db/` project owning the schema for both.** Tidiest on paper, but it breaks
+   the already-merged `python -m persistence.migrate` entry point and the healthcheck,
+   and rewires backend files that a parallel session is editing.
+3. **Ingestion owning `documents`/`chunks` migrations, backend owning the rest.** Matches
+   write-ownership exactly, and splits one schema across two runners with no ordering
+   guarantee between them.
+
+**Consequence:** the schema keeps a single owner — `backend/persistence/migrations/`,
+verified by `python -m healthcheck`. Ingestion assumes the tables exist, validates every
+row it reads back into a model, and names the migration step as a prerequisite in its
+README. CI grows a third job.
+
+---
+
+## Carving boundaries: a body window, validated against all 17 documents
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**Decision:** the exclusion list is implemented as a *window*, not a per-section
+blocklist. The body opens after the last element whose text is exactly
+`FULL PRESCRIBING INFORMATION` and closes at the first packaging heading. A numbered
+heading is a number 1–17, optional trailing dot, optional `.n`, plus a title-shaped
+remainder. Unnumbered structural headings (boxed warnings, `MEDICATION GUIDE`) carve
+sections with a null number. Carving splits at the finest heading level.
+
+**Why, with the evidence.** Every rule below was checked against all 17 corpus PDFs
+before it was written, and three candidate rules died in the process:
+
+1. **The window collapses two exclusions into one rule.** The contents page is headed
+   `FULL PRESCRIBING INFORMATION: CONTENTS`, so an exact-match marker for the bare
+   string lands past both HIGHLIGHTS and the TOC. Present in 17/17, at pages 2–4.
+2. **Packaging is terminal.** Warfarin.pdf was the test: eleven `PRINCIPAL DISPLAY
+   PANEL` blocks plus the product-data tables run from page 30 to the last page, with
+   no prescribing content after them. True in 17/17.
+3. **Case does not signal level — the previously recorded rule was wrong.**
+   `8.1  PREGNANCY` is an ALL-CAPS subsection in Warfarin_2. Level now comes from the
+   number shape alone. The corpus-quirks list in `DESIGN.md` is corrected.
+4. **Numbering variants mix within one document.** Warfarin_2 has `1.  INDICATIONS` and
+   `4  CONTRAINDICATIONS` on the same page, so the optional dot is a per-heading rule.
+
+**Rejected on evidence:**
+
+1. **A word-count floor on heading titles** (at least 2 words, written to reject
+   `1 mg:`). It also rejected `5.1 Hemorrhage`, `11 DESCRIPTION`, and
+   `5.4 Proarrhythmia` — measured at 12–16 top-level sections per document instead of
+   the true 15–16, and it silently dropped roughly a quarter of all subsections.
+   Replaced by a 3-character floor.
+2. **A monotonic section-order guard** (accept a heading only if its number exceeds the
+   last accepted one). Sound-sounding, and false: 6 of 17 documents are non-monotonic in
+   extraction order, so it would have rejected real headings.
+3. **Trusting the numbered pattern alone inside the window.** It matched carton text —
+   `1 mg:`, `10 mg White (dye`, `30 Tablets` — 27 times in Warfarin.pdf. The
+   section-number bound of 1–17 (PLR defines exactly those) plus an uppercase title
+   remainder and a terminator rule removes the class.
+
+**Consequence:** with the shipped rules, all 17 documents resolve 15–16 top-level
+sections (1–17 with the usual omissions of 9 and 15) and 25–60 subsections, and zero
+false headings appear after the packaging boundary.
+
+**Known limit:** this validation ran through `pypdf` text, not through `hi_res`, which
+is what ships. `hi_res` gives better reading order and real element categories, so the
+rules should hold or improve — but the first live run is the first time the two meet.
+Logged in `DESIGN.md` as debt.
+
+---
+
+## Document identity comes from one LLM call per document, and fails loudly
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**Decision:** `drug_name`, `manufacturer`, and `formulation` are read by a single
+`gpt-5-mini` structured-output call per new or changed document, over the label opening
+and closing text. A failed call, an unparsed response, or an empty required field
+raises and stops the run.
+
+**Why:** the bucket is the source of truth, so ingestion sees only an object key and
+PDF bytes — nothing else in the pipeline knows what drug a document is for, and two of
+the three fields are `NOT NULL` and appear in citations. The label text carries all
+three, but in labeler-specific prose. `gpt-5-mini` is already the gate and rewriter
+model, so no new model enters the stack. The call runs 17 times at ingestion, never per
+query.
+
+**Rejected:**
+
+1. **A hand-authored manifest in the repo** (the AI recommendation). Deterministic and
+   free, but it makes the bucket only half the source of truth: adding a document would
+   mean editing code, and the manifest is exactly the kind of parallel list that goes
+   stale against what is actually stored.
+2. **Regex parsing of the title and "Manufactured by" block.** Free and deterministic
+   until a labeler writes it differently, and a bad parse fails silently into a
+   citation — the worst failure direction for this field.
+3. **Falling back to the filename on failure.** Rejected for the same reason pages fail
+   loudly: a `NOT NULL` column holding a guess is worse than a stopped run.
+
+---
+
+## A kept chunk that moved is relocated, not re-embedded
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**Decision:** chunk-level reconciliation has four outcomes, not three: insert, delete,
+**relocate**, and unchanged. A chunk whose content hash is unchanged but whose page,
+index, or section differs has those columns updated in place, inside the same
+per-document transaction, with its embedding untouched.
+
+**Why:** the chunk hash is content-only by design, so it cannot see that a revised label
+pushed a paragraph onto a different page — and `page_start` is what the citation
+deep-links to. Without this, a revision leaves correct-looking chunks pointing at the
+page they used to be on, which is precisely the "citations must be real, not decorative"
+failure the rubric names.
+
+**Rejected:**
+
+1. **Leave kept chunks untouched.** Simplest diff, and it accepts stale page citations
+   after any revision.
+2. **Fold page and index into the content hash.** Always correct, and a one-page shift
+   early in a label would re-embed everything after it — paying embedding cost for text
+   that did not change.
+
+**Also decided:** content that repeats within a single document collapses to one chunk.
+`UNIQUE (document_id, content_sha256)` means the second copy is the same row, so
+emitting it twice would abort the transaction.
+
+---
+
+## Pages are resolved from splitter offsets, not inferred from neighbors
+
+**Timestamp:** 2026-08-12 11:32 -07:00
+
+**Decision:** each element contributes a segment to its section joined text, and a
+chunk page span is read from the segments its character range covers, using the offset
+the recursive splitter reports (`add_start_index`, with whitespace stripping disabled so
+the offsets address the text that was passed in). A range covering no segment raises.
+Cross-page tables are stitched into a single element that carries `page_start` and
+`page_end`, so `PageElement` holds a span rather than one page.
+
+**Why:** page is the guaranteed citation floor and `NOT NULL` in the schema, so it has
+to come from something the extractor actually reported. The first version inferred a
+stitched table end page from the page of the *next* element, which is a guess that is
+wrong whenever a table is the last block on its page.
+
+**Rejected:** locating each chunk by searching for its text in the section
+(`str.find`). Works until the splitter strips whitespace or a section repeats a phrase,
+and then it silently returns the wrong offset — and therefore the wrong page.
+
+---
+
+## Retrieval package restructured into pipeline stages — supersedes the flat `tools/` folder
+
+**Timestamp:** 2026-08-12 12:06 -07:00
+
+**Decision:** `retrieval/tools/` is replaced by three stage packages named for what they
+do in order — `query/` (advice gate, query rewriter, shared transcript rendering),
+`search/` (embeddings client, dense leg, sparse leg, shared chunk columns and row reader),
+`ranking/` (RRF fusion, LLM reranker). A new `retrieval/contract.py` holds the vocabulary
+that crosses the package boundary: `HistoryMessage`, `ScoredChunk`, `Refusal`,
+`Retrieved`. `tests/retrieval/` mirrors the source layout.
+
+**What was wrong with the flat folder:**
+
+1. **Two of its nine modules were not tools.** `chunks.py` held three unrelated things
+   under one filename — a SQL column fragment, a database row reader, and `ScoredChunk`,
+   a domain type flowing through fusion, reranking, the pipeline, and eventually `chat/`.
+   `history.py` held a type the API needs beside a prompt helper private to two tools.
+2. **The return contract was scattered across three files.** A caller handling
+   `run_retrieval`'s result imported `Refusal` from a tool module, `Retrieved` from the
+   pipeline, and `ScoredChunk` and `HistoryMessage` from two more tool modules — three of
+   the four being internals of tools the caller has no other business knowing about.
+3. **The folder hid the pipeline order.** Read alphabetically it was advice_gate, chunks,
+   dense_search, embedder, fusion, history, query_rewriter, reranker, sparse_search —
+   nothing indicating what runs when.
+
+**Why now:** nothing outside `retrieval/` and `tests/` imported the package yet — checked
+across all four active worktrees, including the one building `chat/`. The same move after
+generation and the API wire in would touch several sessions' files instead of none.
+
+**Rejected:** keeping `tools/` and merely evicting the two non-tools into `retrieval/`.
+Smaller diff and it preserved the recorded `tools/` naming convention, but it left the
+folder listing seven modules alphabetically with the stage order still invisible, and it
+pushed five modules up to the package root. Also rejected: merging the dense and sparse
+legs into one `search.py` — they read the same table but are genuinely different
+mechanisms (HNSW vector distance vs `tsquery` ranking), and one file per tool is the
+established convention.
+
+**Naming note:** the contract module is `contract.py`, not `models.py`. In a codebase
+where `RERANKER_MODEL = "gpt-5-nano"`, "model" already means something else.
+
+**Verified:** `tests/retrieval/` does not shadow the `retrieval` package on `sys.path` —
+`pythonpath = ["."]` resolves the real package first, confirmed by a probe test before it
+was removed. Ruff, strict mypy, and all 33 tests pass; the restructure changed no
+behavior.
+
+---
+
+## Ingestion's OpenAI calls move onto `langchain-openai` — supersedes its raw-SDK adapters (11:32)
+
+**Timestamp:** 2026-08-12 12:01 -07:00
+
+**Decision:** ingestion's two OpenAI calls are built on `langchain-openai`, matching the
+one-rule LangChain scope that landed on `main` while the ingestion branch was in flight.
+Identity extraction is `ChatOpenAI(model="gpt-5-mini").with_structured_output(
+DocumentIdentity)`; chunk embedding is `OpenAIEmbeddings(model=EMBEDDING_MODEL,
+dimensions=EMBEDDING_DIMENSIONS)`. Both are exposed as factories —
+`build_identity_model()`, `build_embeddings()` — and the built clients are injected into
+`ingest_document`, which is what keeps the new tests hermetic.
+
+**Why:** the rule names embeddings for "both ingestion and query embedding" explicitly,
+so this was not an open question the way it was for the reranker branch. Ingestion was
+written on the raw SDK a few hours before the rule landed; leaving it there would have
+added a third project to a migration debt that already covers the gate and rewriter,
+for code that had not shipped yet.
+
+**Consequences:**
+
+1. **Manual batching deleted.** `OpenAIEmbeddings` batches internally, so the hand-rolled
+   64-item loop and its ordering guard (`sorted(response.data, key=index)`) went with it.
+   The length check stayed: vectors are zipped with chunks at insert time, so a short
+   response would attach the wrong embedding to a chunk rather than fail.
+2. **`openai` pinned to 2.x here too.** `langchain-openai` pins `openai<3`, and ingestion
+   resolves to the same 2.54.0 the backend carries. It is now imported for `OpenAIError`
+   and nothing else.
+3. **Two model clients instead of one.** `ingest_document` takes both a `BaseChatModel`
+   and an `Embeddings`; the raw SDK client that served both is gone.
+4. **`isinstance` at the boundary, not a cast.** `with_structured_output` is annotated
+   `dict | BaseModel`, so `extract_identity` narrows the result and treats anything
+   off-schema exactly as a failed call: the document is not registered.
+
+**Not changed:** the failure direction. Identity extraction still fails loudly — the
+opposite of the reranker's fail-open — because `drug_name` and `manufacturer` are
+`NOT NULL` and appear in citations.
+
+**Also confirmed against `main` in the same pass:** the splitter stays
+`langchain-text-splitters`' `RecursiveCharacterTextSplitter` (the one LangChain
+component the rule admits beyond the model clients), and extraction keeps calling
+`partition_pdf` directly rather than `UnstructuredPDFLoader`, which flattens away the
+per-element `page_number` and table HTML that the page floor and table handling depend
+on. The merged chat layer reads `drug_name` straight into `Citation.drug`, and its test
+fixture expects the lowercase generic (`"warfarin"`) that the identity prompt specifies.
+
+## API layer: the six endpoints, wiring, and the sync/async boundary
+
+**Timestamp:** 2026-08-12 12:52 -07:00
+
+Built the backend API layer (worktree `be-blockers`). Decisions and rejections:
+
+- **OPENAI_API_KEY env trap fixed by explicit credentials, not env mutation.**
+  `build_embeddings()` / `build_reranker()` read the key from process env, but
+  `load_settings()` never exports `.env` into `os.environ` — local dev with only a
+  `.env` file failed at first query. Both factories now take `api_key: str`, matching
+  `generation_model(api_key)`. Rejected: `os.environ.setdefault(...)` at startup —
+  ambient state mutation, the exact thing the explicit-input stance exists to avoid.
+- **Composition root + per-request DB connection.** `api/state.py` builds every shared
+  client once in the FastAPI lifespan (settings, ChatOpenAI generation, embeddings,
+  reranker, raw OpenAI for gate/rewriter, Supabase storage); one typed accessor
+  contains the single `cast` off `app.state`. Connections open per request via a
+  dependency. Rejected: a shared long-lived connection (unsafe once concurrent
+  requests run on threads) and `psycopg_pool` (new dependency and tuning surface a
+  demo does not need; Supabase's pooler absorbs churn).
+- **Sync/async boundary.** Non-streaming endpoints are plain `def` — FastAPI's own
+  threadpool handles them. Only the SSE query endpoint is async; its blocking work
+  (`run_retrieval`, persistence writes, the document join) is offloaded with
+  `run_in_threadpool` inside `api/query.py`. Rejected: converting the retrieval
+  pipeline to async — a rewrite of every retrieval module for zero demo benefit.
+- **SSE hand-rolled, `sse-starlette` rejected.** `encode_sse` already existed and is
+  unit-tested; `StreamingResponse(media_type="text/event-stream")` plus a 4-line frame
+  generator finishes the job. `sse-starlette` would add a dependency in order to make
+  the tested encoder dead code.
+- **Chunk→document join is one `WHERE id = ANY(...)` query plus a pure pairing**
+  (`persistence/documents.py` + `api/join.py`). A missing parent raises KeyError —
+  FK-guaranteed, so absence is corruption. Rejected: joining documents into the
+  search-leg SQL (widens the retrieval contract another session owns).
+- **An errored stream persists no assistant message.** The partial answer reaches the
+  client via the `error` event only; shared history never shows a truncated answer as
+  if complete. The assistant write happens at `done`, before the event is yielded, so
+  a failed write surfaces instead of following a success signal. A gate refusal *is*
+  persisted (empty sources snapshot) — a reader who never saw the stream still sees
+  the refusal.
+- **Bucket name fixed as `CORPUS_BUCKET = "corpus"`** in `config.py`, beside the
+  embedding constants, same fixed-not-env-tunable reasoning. The upload script (not
+  yet written) must seed this bucket name. Signed-URL TTL is 300 s. The installed
+  storage3 SDK returns the signed URL absolute under both `signedURL`/`signedUrl`
+  keys and returns None on failure — the adapter validates the payload so a failed
+  signing raises at the boundary instead of returning a null URL.
+- **Trace response** wraps the collected `AnswerTrace` plus per-chunk scores read off
+  `ScoredChunk` (`api/models.py:TraceResponse`); a refusal traces as its canned text
+  with an empty retrieval list. Trace mode writes nothing to history, including the
+  user message; covered by unit tests on the write sequencing instead
+  (`tests/test_query.py`).
+
+---
+
+## Eval harness runs in-process — supersedes driving the endpoint's trace mode over HTTP
+
+**Timestamp:** 2026-08-12 13:00 -07:00
+
+**Decision:** the eval harness is a backend package, `backend/eval/`, run as
+`python -m eval`. It imports the retrieval/chat core directly — `run_retrieval()`, the
+chunk→document join, `trace_answer()` — with its own psycopg connection (hosted
+Supabase) and its own model clients. No HTTP, no running server, no `?trace=true`. The
+driver deliberately calls the core rather than the endpoint's composed operation: the
+operation writes conversation history, and a ~72-call eval run must not bury the shared
+UI in robot conversations. The history write stays covered by unit tests.
+
+**Why:** the user's requirement — the harness must not depend on a live backend to run.
+In-process also takes the query endpoint off the harness's critical path (the endpoint
+was unbuilt when this was decided), drops the HTTP-client/serialization layer entirely,
+and keeps the run typed end to end: `RetrievalConfig` in, real `ScoredChunk`s out,
+nothing parsed back out of JSON into restated shapes. The "measure the path users get"
+goal is served *more* directly than over HTTP — the harness calls the very functions
+the endpoint composes.
+
+**Rejected:**
+
+1. **Driving `?trace=true` over HTTP** (Build-Spec §10 and the prior DESIGN.md shape) —
+   needs a server up and an endpoint built; restates every trace type client-side.
+2. **A stub backend serving canned traces** — throwaway code, and a contract the real
+   endpoint could silently drift from.
+3. **Calling the query operation** — writes robot conversations (above).
+4. **Location alternatives:** `scripts/verification/` (import gymnastics or a path
+   dependency into the backend; its README now points at `backend/eval/`) and a
+   top-level `eval/` project (a second lockfile for zero new dependencies — the judge
+   uses `ChatOpenAI`, which the backend already carries). `backend/eval/` follows the
+   `healthcheck.py` precedent: backend-resident, locally run, live-service-touching,
+   excluded from the deployed image via `.dockerignore`; `eval/runs/` is gitignored.
+
+**Consequence, deliberately left unreconciled:** the harness was `?trace=true`'s only
+stated consumer, and this session decided to drop trace mode from the endpoint —
+but the API session (worktree `be-blockers`) concurrently built and recorded it.
+Keep-or-drop is now an endpoint decision to settle at the API merge; the harness is
+indifferent either way.
+
+---
+
+## Eval suite and scoring: dual-lens metrics, single-turn cases, four configurations, gpt-5 judge
+
+**Timestamp:** 2026-08-12 13:00 -07:00
+
+**Decisions (all user-settled this session):**
+
+1. **Dual-lens retrieval scoring.** Every rank metric (Recall@K, MRR, Precision@K)
+   reports **strict** (exact `document_id`) and **lenient** (any same-drug sibling
+   label) at both document and section granularity. Six of ten drugs have sibling
+   labels: lenient-only would hide same-drug discrimination failures, strict-only would
+   report retrieval failures that are not failures — the sibling label says the same
+   thing. The gap between the lenses is itself a reported finding. Rejected: either
+   single lens alone.
+2. **Single-turn suite only.** 18 cases: 7 single-section/table lookups, 3
+   cross-document synthesis, 3 discrimination traps carrying `forbidden_drugs`, 3
+   unanswerable, 2 personal-advice. Rejected: multi-turn follow-up cases (history
+   plumbing through driver and ground truth). Accepted cost, recorded as a known
+   limitation: the rewrite toggle's contextualization job — the delta it exists to
+   measure — goes unmeasured; on single-turn input it exercises only normalization.
+3. **Four configurations** — dense, dense+sparse, dense+rerank, dense+sparse+rerank —
+   with gate and rewriter always on: the advice cases need the gate, and a rewrite-off
+   configuration on a single-turn suite would measure only normalization for the price
+   of a fifth full pass.
+4. **The judge is `gpt-5`** via `ChatOpenAI.with_structured_output` — closes the open
+   question in the 03:25 eval-judge entry. Not the generator's model, so self-preference
+   bias is avoided; the same-provider caveat stands as a known limitation.
+5. **Record/replay.** Every run saves its traces to `eval/runs/<timestamp>.json`;
+   `--score-only <run>` re-scores a saved run with zero pipeline or judge re-spend. The
+   saved run is the artifact behind DESIGN.md's failure analysis.
+
+**Built in this pass (hermetic, in CI):** `eval/cases.py`, `eval/trace.py`,
+`eval/configs.py`, `eval/scoring/{retrieval,grounding,behavior}.py`, and their tests
+(15, in `tests/eval/`, fixtures in the shared root conftest — a second conftest
+collides under mypy's namespace-package module mapping). Still to build: `suite.py`
+(authored ground truth), `judge.py`, `report.py`, `driver.py`, `__main__.py`.
+
+---
+
+## Eval harness completed: driver on the composition root, fail-open judge, guarded entry point
+
+**Timestamp:** 2026-08-12 13:40 -07:00
+
+**Decisions made finishing the harness (judge, report, driver, entry point):**
+
+1. **The driver reuses `api/state.py`'s `build_clients()`** rather than constructing
+   its own model clients. The composition root exists exactly so every caller builds
+   the same clients from explicit settings; a second assembly in the harness would be
+   the drift point the root was built to remove. The driver composes
+   `run_retrieval` → `fetch_documents` + `attach_documents` → `trace_answer` — the
+   same functions `api/query.py` composes — minus the history writes.
+2. **The judge fails open.** A failed or off-schema `gpt-5` call returns `None`; the
+   report counts and lists the case as *unjudged* instead of the run dying sixty calls
+   in. Opposite direction from the advice gate (fail closed) because the judge is
+   measurement, not a safety behavior — a missing measurement must be visible, not
+   fatal. Its prompt lives in `prompts/eval_judge.py` per the one-per-file convention.
+3. **Report metrics are computed at K = 8** — `RetrievalConfig.final_limit`, the
+   chunks generation actually sees. Grading retrieval on what the app answers from,
+   not on a wider candidate pool, keeps the number honest to the user experience.
+   Rejected: reporting a second K (more numbers, no decision they would change).
+4. **`python -m eval` refuses to run while `suite.py` contains "TODO".** The suite
+   ships as a typed skeleton for human authoring; the guard makes a half-authored
+   suite cost zero API spend instead of producing a garbage run. `--score-only`
+   re-scores a saved run: zero pipeline calls, judge re-runs (deterministic scoring
+   is free; verdicts are not persisted in the run file).
+5. **Traces and report land beside each other** — `eval/runs/<stamp>.json` and
+   `<stamp>.report.md`, gitignored; progress goes to stderr so the report stays
+   pipeable.
+
+---
+
+## Eval suite authored: 18 cases, every expected source verified against extracted label text
+
+**Timestamp:** 2026-08-12 13:58 -07:00
+
+**What was done:** all 18 cases in `eval/suite.py` were drafted and their ground truth
+verified against pypdf text extractions of the 17 corpus PDFs (same heading rules as
+`ingestion/carving.py`, so recorded section numbers match what ingestion will store).
+Composition: 6 lookups + 1 table-backed lookup (digoxin § 7.2 interaction table),
+3 multi-document synthesis, 3 discrimination traps with `forbidden_drugs`,
+3 unanswerable, 2 personal-advice. Four questions carry brand names (Eliquis,
+Coumadin, Wellbutrin, Zoloft) to exercise the rewriter's normalization.
+
+**Findings from verification, kept because they shape scoring:**
+
+1. **Sibling labels misalign their numbering in two places.** Warfarin_2 files Missed
+   Dose under 2.5 (2.6 in Warfarin/Warfarin_3) and Drugs that Increase Bleeding Risk
+   under 7.2 (7.3 elsewhere) — its 7.2 collides with the *other* labels' 7.2 CYP450
+   Interactions. Cases were therefore authored against sections whose numbers align
+   across siblings; the warfarin § 7.x collision is recorded as lenient-lens noise on
+   the warfarin×amiodarone case.
+2. **Amiodarone.pdf is the intravenous label.** Its pulmonary content (§ 5.5) covers
+   acute-onset injury and early fibrosis; the lookup and its expected answer were
+   written from that text, not from the oral label's chronic-toxicity profile.
+3. **All three unanswerables are proven absent:** "metformin", "albuterol", and "Reye"
+   have zero matches across all 17 extracted texts. The aspirin case is deliberately
+   adversarial — aspirin itself appears throughout the corpus in bleeding-risk
+   interaction text, but Reye's syndrome content does not exist in it.
+4. **Apixaban § 2.1's dose-reduction criteria are prose in these labels,** not a
+   table, so the table-backed lookup is the digoxin § 7.2 interaction table instead;
+   the warfarin×amiodarone synthesis case also reads from warfarin's § 7.2
+   inhibitor/inducer table.
+
+**Provenance:** drafted by the AI assistant and verified quote-by-quote during
+drafting; recorded as AI usage in `AI_USAGE_RECORDS.md`, pending owner review since
+the assignment requires the test set be authored by the submitter.
+
+---
+
 ## Frontend boundary: responses are cast, not validated — Zod rejected
 
 **Timestamp:** 2026-08-12 11:42 -07:00
@@ -1672,35 +2135,119 @@ so tests do not leak readers; nothing in the UI cancels. Cancellation is not amo
 four graded answer behaviors.
 
 
-## Render deployment: a `prod` deploy branch and a checked-in Blueprint
+## Conversation detail response flattened; OpenAI failures become a typed 502
 
-**Timestamp:** 2026-08-12 15:04 -07:00
+**Timestamp:** 2026-08-12 13:39 -07:00
 
-Both services deploy from a long-lived **`prod`** branch, fast-forwarded from `main`, and
-are declared in a **`render.yaml` Blueprint** at the repo root rather than clicked
-together in the dashboard.
+Two API-layer fixes found by checking the merged backend (PR #14) against the
+frontend contract pinned in `frontend/src/api/types.ts` (branch `api-contract-fixes`):
 
-Rejected: creating the two services by hand in the Render UI. It is faster to start and
-leaves nothing to review, but the configuration then exists only inside a vendor account
-— unreproducible, invisible in the diff, and gone if a service is deleted. The Blueprint
-costs one file and makes `rootDir`, health check path, build command, and the full env-var
-surface reviewable alongside the code they configure.
+- **`GET /conversations/{id}` returned a nested `{conversation, messages}` object**
+  while the frontend declares `ConversationDetail extends Conversation` (flat) and
+  caches details keyed on `detail.id` - on the nested payload that read is
+  undefined, so every loaded conversation cached under the key `"undefined"` and
+  the detail view never rendered. Fixed by making the backend model inherit
+  `ConversationRow` (flat) - the backend moved because `types.ts` is the pinned
+  contract both sides were built against. Rejected: changing the frontend to the
+  nested shape, which would ripple through the store and its tests for no gain.
+- **An `OpenAIError` during retrieval surfaced as a raw 500.** The stream has not
+  started at that point, so it can be a real HTTP error: a second exception handler
+  beside the existing `psycopg.Error` -> 503 maps `OpenAIError` -> 502
+  `language model unavailable`. Mid-stream failures keep their existing path (an
+  `error` event on the already-open stream, handled in the chat layer).
 
-Rejected: deploying `main` directly. `prod` decouples "merged" from "live", so a merge
-does not ship, and what is live is always a commit that has passed CI.
+Route-level tests cover both: the flat shape (including `detail.id`) and the 502.
 
-Rejected: a Render static-site rewrite proxying `/api` to the backend, which would have
-made the two services same-origin and deleted the CORS configuration and the
-`FRONTEND_ORIGIN` variable entirely. Declined because SSE through Render's static-site
-rewrite layer is unverified, and streaming is a graded behavior — not the place to take
-an untested dependency to save one env var.
 
-**`DATABASE_URL` must be the Supavisor session pooler (5432).** Two plausible values are
-both wrong: Supabase's direct connection host is IPv6-only and Render has no IPv6 egress,
-so it fails to connect at all; the transaction pooler (6543) connects and then fails once
-psycopg3 begins issuing prepared statements for a repeated query. The session pooler is
-the only form that works with a per-request psycopg connection and no pool.
+## Answer-path composition pulled into a `conversation/` package
 
-**Free instance tier, accepted.** The backend spins down when idle, so the first question
-after a quiet period waits out a cold start before the first token. Paying for an
-always-on instance buys demo smoothness and nothing that is graded.
+**Timestamp:** 2026-08-12 14:30 -07:00
+
+The chat/persistence/API side had no equivalent of `run_retrieval()` — no single
+function that resolves one question — so every caller re-implemented the composition.
+Audit found the same two shapes copied across the codebase:
+
+- **The `Refusal | Retrieved` branch, written four times:** `api/query.py`
+  (stream + persist), `api/routes.py::build_trace` (JSON trace), `eval/driver.py`
+  (harness), plus a fifth canned-vs-generated branch inside `chat/answer.py`.
+- **The "fold an event stream into answer + sources" loop, written twice**, as
+  identical `match`/`case` blocks: `chat/answer.py::trace_answer` (for the trace) and
+  `api/query.py::answer_events` (for the history write). Two copies of the code that
+  decides what gets stored versus what gets scored is exactly the pair that must not
+  drift.
+- **The chunk→document join re-composed three times**, and `api/` owning domain logic
+  generally (`api/join.py`, `api/query.py`, `build_trace` defined below its caller).
+
+**What was built.** A new `conversation/` package — the composition layer that was
+missing — holding `prepare_turn()`, which runs retrieval, the join, and the answer
+stream, and returns a `Turn`. `chat/` gains a `contract.py` (the vocabulary callers
+speak, mirroring `retrieval/contract.py`) and loses `answer.py`/`events.py`; SSE
+framing moves to `api/sse.py`, so the domain no longer knows its transport.
+
+**The move that collapsed the duplication: `Turn` deliberately does not carry
+`Refusal | Retrieved`.** A refusal is a turn whose query is None, whose chunks are
+empty, and whose events are the canned stream. Because the canned stream already folds
+to `answer=text, sources={}` — the same shape a generated answer folds to — every
+downstream branch disappears: the trace endpoint, the history write, and the eval
+driver each read `Turn` fields and none of them tests the outcome. Four branches became
+one, in `prepare_turn`. `eval/driver.py::refusal_trace` was deleted outright; the
+harness now provably measures the same path users get, because there is only one path
+to call.
+
+Persistence became a pass-through wrapper (`persist_on_done`) rather than a pipeline
+step, which is what lets the SSE endpoint persist while the trace endpoint and the
+harness do not, with neither being a special case of the other.
+
+**Rejected: putting `prepare_turn()` in `chat/pipeline.py`** to avoid adding a package.
+It would have made `chat/` import `retrieval.contract`, turning a self-contained
+generation tool into a composer and inverting the layering the retrieval package
+established. Same de-duplication either way; the naming and dependency direction were
+the whole question.
+
+**Also moved: `api/state.py` → `clients.py` at the backend root.** Composing retrieval
+with chat needs the client bag, and importing it from `api/` would have made
+`conversation/` depend on the web layer. It also fixes a pre-existing inversion —
+`eval/` was reaching into `api.state` for `build_clients()` despite never serving HTTP.
+`app_clients(request)` stayed behind in `api/dependencies.py`, where a `Request` belongs.
+
+**Verification.** The wire contract is untouched: same events, same order, same JSON
+(checked by rebuilding the OpenAPI paths and the trace payload). Backend 74 tests pass,
+mypy strict and ruff clean, frontend 30 tests pass. Tests were reorganized to follow the
+modules (`tests/chat/`, `tests/api/`, `tests/conversation/`), and four copy-pasted
+`make_document` helpers plus two fake-model classes collapsed into `conftest.py`
+fixtures.
+
+
+## First live ingestion run: two connection failures, one real durability bug
+
+**Timestamp:** 2026-08-12 15:12 -07:00
+
+The first-ever live run of the ingestion job (Docker, against hosted Supabase) surfaced
+three findings, none of them in the carving rules the debt list flagged as the risk:
+
+1. **Docker cannot reach Supabase's direct DB host.** `db.<ref>.supabase.co:5432` is
+   IPv6-only (no A record), and Docker Desktop containers here have no IPv6 route. Fix:
+   `ingestion/.env`'s `DATABASE_URL` now points at the IPv4 session pooler
+   (`aws-0-us-east-2.pooler.supabase.com:5432`, username `postgres.<ref>`). Host-side
+   tools (backend `.env`) still use the direct host, which works from the host machine.
+
+2. **The pooler idle-kills the run-long connection.** With one connection held across
+   the whole run and `hi_res` extraction leaving it idle for minutes per document, the
+   socket died after ~13 documents (`SSL error: ssl/tls alert unexpected message`).
+   Fix: TCP keepalives on the psycopg connection.
+
+3. **The per-document commit did not exist — the real bug.** `registry.connect()` used
+   psycopg3's default `autocommit=False`, so the entire run sat inside one implicit
+   transaction and the `with connection.transaction()` blocks in `apply_document` —
+   designed as one commit per document — silently degraded to savepoints. When the
+   connection dropped at document 14, all 13 "committed" documents rolled back, and the
+   re-run reported `17 to ingest, 0 unchanged` against an empty registry. The hermetic
+   reconciliation tests could never catch this: it only exists on a real connection.
+   Fix: `autocommit=True`, which is the documented psycopg3 pattern for making each
+   `transaction()` block a real BEGIN/COMMIT. The idempotent re-run design proved
+   itself the moment the fix landed — byte-identical documents skip extraction and
+   embedding entirely, so the retry only pays for what never committed.
+
+Rejected alternative for (2)/(3): retry/backoff around the DB writes — rejected as
+gold-plating; per-document durability plus cheap re-runs already make a dropped
+connection a resumable event, which is the property the design actually wants.
