@@ -1,0 +1,51 @@
+# Render Blueprint — the two deployed MedBrain services.
+#
+# Applied from the `prod` branch. `ingestion/` is deliberately absent: it is a
+# run-once local batch job that writes into hosted Supabase and is never deployed
+# (DESIGN.md, "Ingestion").
+#
+# Two values cannot be filled in by this file and are set once in the dashboard
+# after the first apply, because each service needs the other's URL and Render
+# exposes only a bare hostname to `fromService`, not a scheme-prefixed URL:
+#   backend  FRONTEND_ORIGIN     = https://<frontend>.onrender.com
+#   frontend VITE_API_BASE_URL   = https://<backend>.onrender.com
+# The frontend must be redeployed after its value is set — Vite bakes env vars in
+# at build time, so changing it does not affect an already-built bundle.
+
+services:
+  - type: web
+    name: medbrain-backend
+    runtime: docker
+    plan: free
+    region: oregon # keep this matched to the Supabase project's region
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    branch: prod
+    healthCheckPath: /health
+    envVars:
+      # Supavisor SESSION pooler URI (port 5432), not the direct connection and not
+      # the transaction pooler. Supabase's direct host is IPv6-only and Render has no
+      # IPv6 egress; transaction mode rejects the prepared statements psycopg3 issues.
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      # The single origin CORSMiddleware allows (backend/api/app.py).
+      - key: FRONTEND_ORIGIN
+        sync: false
+
+  - type: web
+    name: medbrain-frontend
+    runtime: static
+    rootDir: frontend
+    branch: prod
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    envVars:
+      # Read at build time by frontend/src/api/endpoints.ts. Include the scheme.
+      - key: VITE_API_BASE_URL
+        sync: false
