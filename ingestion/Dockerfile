@@ -20,4 +20,8 @@ RUN uv sync --frozen --no-dev --group extraction
 
 COPY . .
 
+# Without this, the job's per-document progress sits in Python's stdout buffer until
+# the process exits — a long hi_res run looks hung when its output is piped or logged.
+ENV PYTHONUNBUFFERED=1
+
 CMD ["uv", "run", "--no-sync", "python", "-m", "pipeline"]
