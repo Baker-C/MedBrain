@@ -1,3 +1,4 @@
+import { useConversations } from '../state/conversations'
 import { ConversationList } from './ConversationList'
 
 interface SidebarProps {
@@ -6,6 +7,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ open, onToggle }: SidebarProps) {
+  const { startDraft } = useConversations()
+
   return (
     <aside
       className={`flex flex-col border-r border-gray-200 bg-gray-50 transition-[width] duration-200 ${
@@ -25,6 +28,8 @@ export function Sidebar({ open, onToggle }: SidebarProps) {
       <div className="px-2">
         <button
           type="button"
+          onClick={startDraft}
+          aria-label="New chat"
           className={`flex w-full items-center gap-2 rounded-lg p-2 text-sm text-gray-700 hover:bg-gray-200 ${
             open ? '' : 'justify-center'
           }`}

@@ -1,18 +1,23 @@
-// Types mirroring the backend API surface described in DESIGN.md.
-// Types and endpoint paths only — no fetch logic yet.
+// Mirrors the backend contract: `chat/events.py` (SSE payloads), `chat/context.py`
+// (Citation), and `persistence/rows.py` (conversations, messages).
+//
+// These are compile-time shapes only — responses are cast, not validated. A backend
+// rename therefore surfaces as a broken render, not a typed error at the boundary.
+// Deliberate: see DESIGN_RECORDS.
 
 export type Role = 'user' | 'assistant'
 
-/** One resolved citation. Precision degrades gracefully: section fields and page are nullable. */
+/** One resolved source. Section fields degrade to null on a chunk with no carved
+ *  section; `page_start` is the guaranteed floor every citation deep-links to. */
 export interface Citation {
   document_id: string
   drug: string
   section_number: string | null
   section_title: string | null
-  page_start: number | null
+  page_start: number
 }
 
-/** Sentinel tag (e.g. "S1") → citation mapping, sent as the first SSE event. */
+/** Sentinel tag → citation. Keys carry no brackets (`S1`); answer text carries `[[S1]]`. */
 export type SourcesMap = Record<string, Citation>
 
 export interface Conversation {
@@ -35,38 +40,40 @@ export interface ConversationDetail extends Conversation {
   messages: Message[]
 }
 
-/** POST /conversations request body. */
+/** POST /conversations. Title is set here or never — the API has no PATCH. */
 export interface CreateConversationRequest {
-  title?: string
+  title: string
 }
 
-export type RetrievalMode = 'hybrid' | 'dense' | 'sparse'
-
 /**
- * POST /conversations/{id}/query request body.
- * Pipeline config is an explicit input per request, never ambient state.
+ * POST /conversations/{id}/query body.
+ *
+ * Pipeline toggles are an explicit per-request input, never ambient state, so the eval
+ * harness can vary one at a time. Omitted toggles take the backend default. There is
+ * deliberately no retrieval "mode": dense search always runs and everything else is an
+ * independent switch. The UI sends none of them.
  */
 export interface QueryRequest {
   question: string
-  mode?: RetrievalMode
+  gate?: boolean
   rewrite?: boolean
+  sparse?: boolean
   rerank?: boolean
-  gating_variant?: string
   judge?: boolean
 }
 
-/** SSE event names on the query stream, in emission order. */
-export type QueryEventName = 'sources' | 'token' | 'done' | 'error'
-
-/** `done` event payload — post-hoc annotations (e.g. the live judge's grounding flag). */
-export interface DonePayload {
-  judge_grounded?: boolean
-}
-
-/** `error` event payload. */
-export interface ErrorPayload {
-  message: string
-}
+/**
+ * The four SSE events, normalized into one union keyed by event name.
+ *
+ * Order is `sources` (before any token, so sentinels always resolve) → `token`s →
+ * `done` or `error`. Each frame's payload is JSON, so newlines in answer text cannot
+ * break framing.
+ */
+export type QueryEvent =
+  | { name: 'sources'; sources: SourcesMap }
+  | { name: 'token'; text: string }
+  | { name: 'done'; judge_grounded: boolean | null }
+  | { name: 'error'; message: string }
 
 /** GET /documents/{id}/source-url — short-lived signed URL for the source PDF. */
 export interface SourceUrlResponse {
