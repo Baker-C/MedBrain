@@ -19,7 +19,7 @@ from clients import build_clients
 from config import Settings, load_settings
 from eval.cases import EvalCase
 from eval.configs import EVAL_CONFIGS
-from eval.driver import run_case
+from eval.driver import run_case, shared_rewrite
 from eval.judge import build_judge, judge_answer
 from eval.report import Verdicts, render_report
 from eval.suite import SUITE
@@ -34,15 +34,20 @@ def unfinished(case: EvalCase) -> bool:
 
 
 def collect_traces(settings: Settings) -> EvalRun:
-    """Every case under every configuration, through the real pipeline."""
+    """Every case under every configuration, through the real pipeline.
+
+    The rewrite happens once per case, before the configuration loop, so the
+    configurations differ only in the toggle under test (see `shared_rewrite`).
+    """
     clients = build_clients(settings)
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
     traces = []
     with psycopg.connect(settings.database_url) as conn:
         for case in SUITE:
+            rewritten_query = shared_rewrite(clients, case)
             for name, config in EVAL_CONFIGS.items():
                 print(f"running {case.id} × {name}", file=sys.stderr)
-                traces.append(run_case(clients, conn, case, name, config))
+                traces.append(run_case(clients, conn, case, name, config, rewritten_query))
     return EvalRun(started_at=started_at, traces=traces)
 
 

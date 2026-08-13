@@ -32,17 +32,31 @@ class Proceed:
 
 
 def prepare_query(
-    client: OpenAI, query: str, history: list[HistoryMessage], config: RetrievalConfig
+    client: OpenAI,
+    query: str,
+    history: list[HistoryMessage],
+    config: RetrievalConfig,
+    rewritten_query: str | None = None,
 ) -> Refusal | Proceed:
     """Gate, then rewrite. Each tool is toggleable; a refusal stops the pipeline,
-    and with both toggles off the raw query proceeds without any LLM call."""
+    and with both toggles off the raw query proceeds without any LLM call.
+
+    `rewritten_query` is a rewrite already computed for this question, and stands in
+    for the rewriter call. The eval harness passes one so that every configuration
+    with `rewrite` on searches identical text; the rewriter is a nondeterministic
+    model call, and letting each configuration run its own makes configurations
+    differ by more than the toggle under test. It is ignored when `rewrite` is off,
+    so that toggle still means "search the raw query".
+    """
     if config.gate:
         refusal = run_query_gate(client, query, history)
         if refusal is not None:
             return refusal
-    if config.rewrite:
-        return Proceed(query=run_query_rewriter(client, query, history))
-    return Proceed(query=query)
+    if not config.rewrite:
+        return Proceed(query=query)
+    if rewritten_query is not None:
+        return Proceed(query=rewritten_query)
+    return Proceed(query=run_query_rewriter(client, query, history))
 
 
 def sparse_candidates(
@@ -102,6 +116,7 @@ def run_retrieval(
     query: str,
     history: list[HistoryMessage],
     config: RetrievalConfig,
+    rewritten_query: str | None = None,
 ) -> Refusal | Retrieved:
     """The whole query path: gate, rewrite, search, fuse, rerank. Callers handle two
     outcomes — a refusal to stream as-is, or chunks to answer from.
@@ -109,8 +124,10 @@ def run_retrieval(
     Each model client is passed in, built by its own stage's factory, because each tool
     picks its own model. `client` is the raw OpenAI SDK the gate and rewriter still use;
     it disappears when those two move onto `ChatOpenAI` (see DESIGN.md's debt list).
+
+    `rewritten_query` reuses a rewrite computed elsewhere; see `prepare_query`.
     """
-    prepared = prepare_query(client, query, history, config)
+    prepared = prepare_query(client, query, history, config, rewritten_query)
     if isinstance(prepared, Refusal):
         return prepared
     return Retrieved(

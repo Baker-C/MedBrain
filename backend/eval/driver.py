@@ -19,6 +19,7 @@ from eval.cases import EvalCase
 from eval.trace import CaseTrace, ChunkTrace
 from retrieval.config import RetrievalConfig
 from retrieval.contract import ScoredChunk
+from retrieval.query.query_rewriter import run_query_rewriter
 
 
 def chunk_trace(scored: ScoredChunk, retrieved: RetrievedChunk) -> ChunkTrace:
@@ -38,20 +39,36 @@ def chunk_trace(scored: ScoredChunk, retrieved: RetrievedChunk) -> ChunkTrace:
     )
 
 
+def shared_rewrite(clients: AppClients, case: EvalCase) -> str:
+    """The one rewritten query every rewrite-enabled configuration for this case searches.
+
+    Rewriting is a nondeterministic model call, so a per-configuration rewrite makes
+    configurations differ by more than the toggle under test: in the 2026-08-12 run,
+    15 of 18 cases searched different text across the four configurations, and the
+    resulting served-set differences were read as retrieval deltas. Computing the
+    rewrite once per case takes that variance out of every measured delta.
+    """
+    return run_query_rewriter(clients.openai, case.question, [])
+
+
 def run_case(
     clients: AppClients,
     conn: psycopg.Connection[TupleRow],
     case: EvalCase,
     config_name: str,
     config: RetrievalConfig,
+    rewritten_query: str,
 ) -> CaseTrace:
     """One case under one configuration, end to end. Single-turn by design: the
     history is empty, so the rewriter only ever normalizes (see DESIGN.md).
 
+    `rewritten_query` is this case's `shared_rewrite`, reused rather than recomputed.
+    A configuration with `rewrite` off ignores it and searches the raw question.
+
     A refused case needs no special handling — it is a turn with no query and no
     chunks, whose answer is the refusal text that would have streamed.
     """
-    turn = prepare_turn(clients, conn, case.question, [], config)
+    turn = prepare_turn(clients, conn, case.question, [], config, rewritten_query)
     answer = asyncio.run(collect_answer(turn.events))
     return CaseTrace(
         case_id=case.id,
