@@ -23,212 +23,148 @@
 ## Chunking and ingestion — three passes, structure-aware
 
 ```
-PDF ──► pass 1: extract ──► pass 2: carve ──► pass 3: split ──► embed ──► reconcile
-        hi_res layout       section titles     only what is             │
-        elements, tables    + tables, alike    still too large     ┌────┴────┬─────────┬────────┐
-        grouped, boiler-    topics grouped     ~1500ch, 150 ov.  new │ changed │ unchanged │ removed
-        plate removed       tightly                             insert│  diff   │   skip    │ delete
+PDF ─► 1. extract ─► 2. carve ─► 3. split ─► embed ─► reconcile
+       hi_res         section      only what          new│changed│unchanged│removed
+       elements,      titles +     is still too    insert│ diff  │  skip   │ delete
+       tables kept    tables       large
+       grouped
 ```
 
-**Pass 1 — extraction.** Unstructured `hi_res` turns the PDF into typed, ordered text
-elements rather than a wall of characters. Tables survive as structured HTML instead of
-being flattened, and page furniture and boilerplate are dropped. *Rejected:*
-pypdf/pdfplumber — they shred the dosage and interaction tables where these answers live.
+1. **Extract.** Unstructured `hi_res` turns the PDF into structured text elements, keeping
+   tables grouped together and dropping boilerplate.
+2. **Carve.** A custom carver splits along section titles and table boundaries, keeping
+   alike topics tightly grouped. The section number and title become the citation.
+3. **Split.** Any section or table still too large to stand as one chunk gets a recursive
+   split with slight overlap. Splitting stays inside a section, so no chunk straddles two
+   citable ones.
 
-**Pass 2 — section carving.** A custom carver splits along PLR section titles and table
-boundaries, so a chunk is a topic rather than a window. Alike material stays tightly
-grouped, and the section number and title become the citation. This is the pass that makes
-the deliverable a *citation* rather than a chunk.
+`CHUNK_TARGET_CHARS = 1500`, off the median section size; `CHUNK_OVERLAP_CHARS = 150`;
+`MIN_CHUNK_CHARS = 400` as a floor under the budget so a long repeated heading cannot shrink
+chunks to nothing. *Rejected:* recursive splitting alone — cutting on character count puts
+boundaries mid-section, so the section a citation names is wrong, and it shreds the tables
+where these answers live.
 
-**Pass 3 — recursive split, only where needed.** Sections and tables that still exceed the
-budget get a recursive split with slight overlap; anything that fits stays whole. Splitting
-happens *inside* a section, so no chunk straddles two citable sections and overlap never
-crosses a boundary.
+**Idempotency is reconciliation.** A `documents` registry holds each file's SHA-256:
+identical files skip extraction, changed files diff at chunk level, deleted files lose their
+chunks, one transaction per document. *Rejected:* `ON CONFLICT DO NOTHING` — it prevents
+duplicates but never deletes, so an edited PDF leaves stale chunks answering queries.
 
-**Sizes.** `CHUNK_TARGET_CHARS = 1500`, chosen off the median section size in this corpus.
-`CHUNK_OVERLAP_CHARS = 150`, capped at a quarter of the available budget. `MIN_CHUNK_CHARS
-= 400` is a floor under the budget so a long repeated heading cannot shrink chunks to
-nothing — small sections are left whole and are never merged. *Rejected:* a naive recursive
-split over the whole document — cutting on character count puts boundaries mid-section, so
-the section a citation names is wrong. *Rejected:* one chunk per section, uncapped —
-sections run from one sentence to thousands of characters, and uneven chunks degrade dense
-comparability.
+## Embeddings, store, and prompts
 
-**Idempotency is reconciliation, not de-duplication.** A `documents` registry holds each
-file's SHA-256. Byte-identical files skip extraction entirely; changed files diff at chunk
-level; deleted files lose their chunks. One transaction per document. *Rejected:*
-`ON CONFLICT DO NOTHING` — it prevents duplicates but never deletes, so an edited PDF
-leaves stale chunks answering queries forever.
+**`text-embedding-3-large` at 1536 dims** — the large model for the best semantic
+extraction, capped at 1536 to stay inside pgvector's 2000-dim index ceiling. *Considered:*
+16-bit `halfvec` half-vectors to carry more meaning under the same ceiling — overkill at
+this corpus size.
 
-## Embeddings, store, and prompt structure
+**Supabase was the Swiss army knife of this project.** `pgvector` for dense search, simple
+data tooling and easy metadata handling for the typed chunk columns a citation joins
+against, `websearch_to_tsquery` for sparse retrieval alongside dense, and a Storage bucket
+for the documents themselves — it was right there. *Rejected:* a dedicated vector store
+beside it, which buys a second system to keep in sync for no recall win at 17 documents.
 
-**Embeddings — `text-embedding-3-large` at 1536 dims.** The large model for the best
-semantic separation available, truncated via the API's `dimensions` parameter because
-pgvector's HNSW index caps at 2000 dims — native 3072 is storable but unindexable, forcing
-a sequential scan on every query. *Considered and rejected:* `halfvec` 16-bit half-vectors,
-which would fit more dimensions under the same index ceiling. Overkill at this corpus size,
-and it buys precision in a place precision was not the bottleneck. *Rejected:*
-`text-embedding-3-small` — the large model is Matryoshka-trained, so its leading 1536 dims
-beat the small model at identical storage cost.
-
-**Store — Supabase, doing four jobs.** Postgres with `pgvector` for dense search, the same
-tables for typed chunk metadata so a citation is a join rather than a JSON blob lookup,
-Postgres full-text (`websearch_to_tsquery` + `ts_rank`) for the sparse half of hybrid
-retrieval, and Storage for the corpus PDFs the citations deep-link into. It was the Swiss
-army knife of this project: one service, one connection, no cross-store consistency
-problem. *Rejected:* a dedicated vector DB beside it — conversations need a relational home
-regardless, so a second store buys two systems to sync on every re-ingestion and two places
-for metadata to disagree, for no recall win at 17 documents.
-
-**Prompt structure — labelled and exemplified, not prose.** The prompts began as
-paragraph-style instructions with few examples, and the model drifted. They are now
-explicitly structured: the gate prompt states one labelled clause per verdict
-(`personal_advice`, `unsafe`, `off_topic`, `none`), each carrying concrete exemplars and an
-explicit boundary case — a question about a drug this corpus may not hold is `"none"`,
-because coverage is retrieval's call, not the gate's. The generation prompt separates what
-to answer from, what to cite with, and what to do when the excerpts do not cover it.
-Scaling this means adding examples, not rewriting prose — and examples are the kind of
-thing that can move into the database and be edited without a deploy.
+**Prompts** were originally paragraph-esque with few examples. They are now clearly
+structured with plenty of provided examples for the judge and gate prompts to reason
+against. Extending them at scale means adding examples, not rewriting prose — and examples
+can move into the database.
 
 ## Corpus
 
-**Modern PLR-format FDA labels from DailyMed**, chosen for their unambiguous wording: PLR
-relies on explicit statements over demonstratives and cross-references, which is what makes
-an extracted passage still mean the same thing once it is out of its document. Old-format
-(non-PLR) labels were removed — they carry no numbered sections and would have required a
-second carving strategy for no gain on this task. The set is also large enough to stage
-every query shape the assignment asks for: overlap, non-overlap, and cross-document.
+**PLR medication labels**, chosen for unambiguous wording: PLR relies on explicit statements
+rather than demonstratives, which matters when a passage has to still mean the same thing
+outside its document. Large enough to stage every query shape the assignment requires —
+overlap, non-overlap, and multi-document. Old-format non-PLR labels were removed as
+unneeded complexity for this task.
 
-| Drug | Documents | Overlap |
+| Drug | Documents | |
 |---|---|---|
-| warfarin | `Warfarin`, `Warfarin_2`, `Warfarin_3` | **3 sibling labels** |
+| warfarin | `Warfarin`, `Warfarin_2`, `Warfarin_3` | **3 siblings** |
 | apixaban | `Apixaban`, `Apixaban_2` | **2 siblings** |
 | bupropion | `Bupropion`, `Bupropion_2` | **2 siblings** |
 | digoxin | `Digoxin`, `Digoxin_2` | **2 siblings** |
 | escitalopram | `Escitalopram`, `Escitalopram_2` | **2 siblings** |
 | venlafaxine | `Venlafaxine`, `Venlafaxine_2` | **2 siblings** |
-| amiodarone | `Amiodarone` | single |
-| mirtazapine | `Mirtazapine` | single |
-| sertraline | `Sertraline` | single |
-| trazodone | `Trazodone` | single |
+| amiodarone · mirtazapine · sertraline · trazodone | one label each | single-source |
 
-17 documents, 10 drugs. **6 drugs carry sibling labels** from different manufacturers —
-near-identical regulatory prose that retrieval must tell apart, which is what makes
-*discrimination* the hard problem here rather than recall. **4 are single-source**, giving
-unambiguous lookups. **Cross-document questions** are staged on genuinely separate
-documents: sertraline § 5.1 + venlafaxine § 5.1 (suicidality by age), warfarin § 7.2 +
-amiodarone § 7.2 (interaction from both sides), sertraline § 5.3 + trazodone § 5.5
-(bleeding). **Unanswerables** use drugs deliberately kept out — metformin, albuterol,
-aspirin.
+17 documents, 10 drugs. The 6 sibling groups are near-identical prose retrieval must tell
+apart — which makes discrimination, not recall, the hard problem. Cross-document questions
+run on separate documents (sertraline + venlafaxine § 5.1; warfarin + amiodarone § 7.2;
+sertraline § 5.3 + trazodone § 5.5). Unanswerables use drugs kept out: metformin,
+albuterol, aspirin.
 
 ## Retrieval
 
 ```
-question ─► gate ── refuse ───────────────────────────────────┐  (fails CLOSED)
-         ─► rewrite (standalone + brand→generic)              │  (fails OPEN)
-              ├─► dense  (HNSW cosine, top 10) ─┐             │
-              └─► sparse (ts_rank, top 10) ─────┴─ RRF k=10 ──┤
-                                                  rerank ─────┤  gpt-5-nano, 0–10
-                                            score < 3 dropped ┤
-                                                    top 5 ────┴─► generate (streamed)
-                                                    empty ──────► canned decline
-
-SSE:  sources (mapping FIRST, before any token) → token… → done | error
+question ─► gate ── refuse ──────────────────────────────┐  (fails CLOSED)
+         ─► rewrite                                      │  (fails OPEN)
+              ├─► dense  (HNSW cosine, top 10) ─┐        │
+              └─► sparse (ts_rank, top 10) ─────┴ RRF ───┤
+                                          rerank, cut <3 ┤
+                                                  top 5 ─┴─► generate (streamed)
+                                                  empty ───► canned decline
 ```
 
-Hybrid retrieval is the one stretch goal, chosen because the domain decides it: a clinician
-acting on a near-miss passage is worse than one missing a feature. RRF uses `k = 10`, sized
-to the 10-candidate legs rather than inheriting the published 60, which was tuned on TREC
-runs ~1000 deep and over 10 candidates spreads scores only 11% — enough that a chunk both
-legs found at rank 10 outranked a chunk one leg found at rank 1. *Rejected:* weighted score
-blending, since cosine and `ts_rank` scales need a calibration that would itself need evals.
+Hybrid retrieval is the one stretch goal. RRF uses `k = 10`, sized to the 10-candidate legs
+rather than inheriting the published 60, which was tuned on lists ~1000 deep and over 10
+candidates leaves rank nearly meaningless. *Rejected:* weighted score blending — cosine and
+`ts_rank` scales need a calibration that would itself need evals.
 
 ## Failure analysis
 
-**Chunk count trades precision against recall, and the trade is real.** A large returned
-chunk count produced very accurate answers and badly lower precision — and cost roughly
-**3× the query latency**. It also defeated the point of hybrid: at this corpus size a wide
-net meant dense and sparse returned largely the same documents, so the second leg added
-nothing. Lowering the count on both legs and gating rerank at a score cutoff inverted it —
-lower average accuracy, but a higher proportion of *specifically* correct chunks (one or
-two ranked higher, average lower). The cutoff is the tuning knob and has not been swept
-beyond the threshold itself.
+**Chunk count trades precision against accuracy.** Too large a count lowered precision
+greatly while giving very accurate answers, took ~3× as long per query, and — at this corpus
+size — stopped dense and sparse returning different documents at all. Lowering the returned
+count on both legs and gating rerank at a score cutoff gave less accurate results on
+average but a higher proportion of specifically correct chunks: one or two ranked higher,
+the average lower. The cutoff is the knob to fine-tune.
 
-**Sparse retrieval underperformed dense in most cases and matched it in some**, tracking
-query specificity — which makes sense for a corpus this explicit. Dense runs first and
-takes the good hits, so sparse largely returns overlap and contributes few net-new chunks
-to the final list. A bigger corpus would separate them; so would a different merge strategy
-before reranking, rather than fusing two lists that mostly agree.
+**Sparse fetching underperformed dense in most cases and was even in some**, tracking query
+specificity, which fits a corpus this detailed. Dense runs first and takes the good hits, so
+sparse largely returns overlapping chunks and contributes few to the final list. A bigger
+corpus or a different merge strategy before reranking would fix it.
 
-**Two measurements were measuring nothing**, and no test caught either:
+**Two measurements were measuring nothing.** The sparse leg had never returned a row —
+`websearch_to_tsquery` joins terms with `&`, so a question demanded one chunk holding every
+lexeme, and 18/18 returned zero. It was invisible because an empty leg is a handled case in
+fusion. Separately, each eval configuration re-ran the rewriter, so 15 of 18 cases searched
+different text per configuration. This retracts an earlier finding that hybrid retrieval
+cost discrimination accuracy — impossible, since the leg returned nothing.
 
-1. **The sparse leg had never returned a row.** `websearch_to_tsquery` joins terms with
-   `&`, so a question demanded one chunk containing every lexeme — 18/18 questions returned
-   zero rows. Invisible, because an empty leg is a *handled* case in fusion: hybrid degraded
-   silently to dense and reported a clean run. Fixed by rewriting `&` → `|`.
-2. **Each configuration re-ran the query rewriter**, so 15 of 18 cases searched different
-   text per configuration and every delta mixed the toggle under test with LLM variance.
+Remaining within-case failures: **multi-hop collapse** (the amiodarone label names warfarin,
+so its chunks take every slot and warfarin's own § 7.2 table never surfaces); **numeric
+precision in tables** (columns conflated, one invented dose range); **partial section
+serving** (sertraline § 5.1 spans 3 chunks, the needed one unserved); **citation drift** (18
+of 64 answers wrote `[S1]` not `[[S1]]`, and scored grounding-clean because unparsed tags
+cannot be flagged).
 
-**This retracts an earlier finding, and the retraction is the point.** That run produced a
-fluent analysis claiming hybrid *cost* discrimination accuracy — sparse pulling sibling-drug
-chunks, rerank keeping them. Impossible: the leg returned nothing. It survived review
-because it sounded exactly like a tradeoff a hybrid retriever really makes. *Check whether a
-subsystem ran before explaining what it did.*
-
-Within-case failures, unaffected by that confound:
-
-- **Multi-hop collapse** (`synthesis-warfarin-amiodarone`): the amiodarone label names
-  warfarin, so its chunks match both entities and take every slot, while warfarin's own
-  § 7.2 CYP table is a semantically thin drug list and never surfaces.
-- **Numeric precision in tables**: columns conflated (17% serum vs 40% AUC); one invented
-  30–50% where the table implies 15–30%.
-- **Partial section serving**: sertraline § 5.1 spans 3 chunks; the age-specific one was not
-  served. One config honestly declined half the comparison, another overclaimed it.
-- **Silent citation drift**: 18 of 64 answers wrote `[S1]` not `[[S1]]` — and scored
-  *grounding clean*, because tags that never parsed cannot be flagged unresolved.
-
-**No run yet exists with a working sparse leg, `k=10`, top-5, and the threshold.** Every
-retrieval metric here describes dense-only retrieval, whatever it was labelled.
+**No run yet exists with a working sparse leg, `k=10`, top-5, and the threshold.**
 
 ## What another week buys
 
-**Scaling to 10,000 documents.** Ingestion has to go multi-threaded, with lighter LLM calls
-or per-drug batched document operations — it is currently one document at a time. Larger
-chunk counts would help recall at that size, but same-drug labels cluster tightly in vector
-space, so plain k-nearest starts returning near-duplicates; that wants a different
-neighbour strategy — searching from chunks paired with known cross-contaminating drugs or
-situations, or a per-document quota before fusion. `ts_rank` also stops being adequate and
-wants a real BM25 index.
-
-**Cost.** Query-time LLM calls are deliberately split per tool — the rewriter and the
-validity gate are two separate calls. At scale some of those merge into one call to save
-time and money. Reranking currently uses a small OpenAI model; a purpose-built reranker or
-a fine-tuned semantic matcher would be cheaper and faster at volume. **Caching is the
-obvious lever and I would decline it here** — this is a medical setting, and serving a
-cached vector search is a correctness risk I would not take to buy latency. Safety first.
-
-**Latency.** This is a real problem, not a theoretical one. Several LLM checks and vector
-queries could fire concurrently, but some gate the others, so firing everything at once
-raises cost on queries that would have short-circuited. That is the actual budget question:
-pay for speculative work, or keep the gates.
-
-**Security.** The query safety check should run on a model from a different vendor
-entirely, not another OpenAI model. Cross-referencing two independent models is worth more
-than a second opinion from the same family.
-
-**Multi-tenancy** is its own project. There are no accounts at all right now — conversation
-history is global and shared. It means a tenant column on `documents`, row-level tenancy on
-the conversation tables, and RLS enforcement rather than application-code checks.
+- **Ingestion at scale** — multi-threaded, with lighter LLM calls or batch document
+  operations grouped by drug.
+- **Retrieval at scale** — larger chunk counts help a larger corpus but cluster tightly,
+  since same-drug documents are so similar. That wants neighbour strategies beyond
+  k-nearest: searching from chunks combined with known cross-contaminating drugs or
+  situations.
+- **Cost** — query calls are split per tool (rewriting and the validity gate are two
+  separate calls); some could group into one. Reranking uses a small OpenAI model, where a
+  dedicated reranker or fine-tuned semantic matching would be cheaper at scale.
+- **Latency** — a real issue. Multiple LLM checks and vector queries could run at once, but
+  some gate the others, so firing everything costs more than letting the gates short-circuit.
+- **Caching** — probably a bad idea in a medical setting. I would take the cost and speed
+  penalty at scale instead. Safety first.
+- **Security** — the query check should be a different model from OpenAI altogether, for
+  cross-referencing.
+- **Multi-tenancy** — its own fish to fry. There are no accounts at all right now.
 
 ## Known shortcuts and technical debt
 
-- **No DB-backed retrieval test.** The suite is hermetic and touches no Postgres — exactly
-  why the empty sparse leg survived. The most expensive gap here, and not closed.
-- **`k=10` and `candidate_limit=10` are unmeasured.** The threshold sweep replays stored
-  scores and is sound; the candidate count changes what is retrieved in the first place.
-- **Nothing counts sentinel drift** — the lenient reader makes it harmless *and*
-  unobservable, the same trap in a new place.
+- **No DB-backed retrieval test** — the suite is hermetic and touches no Postgres, which is
+  exactly why the empty sparse leg survived.
+- **`k=10` and `candidate_limit=10` are unmeasured** — the threshold sweep replays stored
+  scores; the candidate count changes what is retrieved in the first place.
+- **Nothing counts sentinel drift** — the lenient reader makes it harmless and unobservable.
 - The gate and rewriter still call the OpenAI SDK directly, off the one-client rule.
-- The frontend **casts** API responses instead of validating them.
-- The sparse leg is `ts_rank`, not BM25 — no length normalization, no term saturation.
+- The frontend casts API responses instead of validating them.
+- The sparse leg is `ts_rank`, not BM25.
 - No auth, no caching, no live LLM-judge.
