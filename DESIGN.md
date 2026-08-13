@@ -10,8 +10,6 @@ numbered sections 1–17, and 6 of the 10 drugs have 2–3 sibling labels from d
 manufacturers. Uniform structure makes one carving strategy sufficient; sibling labels
 make *discrimination* the hard retrieval problem rather than recall.
 
-Detail lives in `DESIGN_COMPLETE.md`; every decision and what lost, in `DESIGN_RECORDS.md`.
-
 ## System
 
 ```

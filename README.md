@@ -177,7 +177,5 @@ only proves the bundle compiles.
 | `scripts/verification/` | a pointer only — the eval harness moved to `backend/eval/` |
 | `DocumentCorpus/` | the 17 source PDFs |
 | `render.yaml` | Render blueprint for the two deployed services |
-| `DESIGN.md` | the graded design doc: architecture, rejected tradeoffs, failure analysis, debt |
-| `DESIGN_COMPLETE.md` | the long-form working design doc `DESIGN.md` is distilled from |
-| `DESIGN_RECORDS.md` | append-only record of every decision and what lost |
+| `DESIGN.md` | the design doc: architecture, rejected tradeoffs, failure analysis, debt |
 | `AI_USAGE.md` | which AI tools were used, and where their output was overridden |

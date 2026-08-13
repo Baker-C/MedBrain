@@ -1,98 +1,33 @@
 # CLAUDE.md
 
-## Living Documents — Keep These Updated
+## DESIGN.md — keep it current
 
-Two markdown files at the repo root are yours to maintain. They split by purpose:
+`DESIGN.md` is the design deliverable and the source of truth for project design: the
+current stack, feature scope, architecture, and behavior, alongside the tradeoffs that
+were rejected, the eval failure analysis, next steps, and known debt. **This file
+(`CLAUDE.md`) does not duplicate any of it** — read `DESIGN.md` for design facts. If the
+two ever disagree, `DESIGN.md` is right and `CLAUDE.md` needs fixing.
 
-| File | Holds | Style |
-|---|---|---|
-| `DESIGN.md` | The design **as it is now** — source of truth | Edit in place |
-| `DESIGN_RECORDS.md` | **Why** each choice was made, and what was rejected | Append-only |
+It is **edited in place** and describes the present state, not the order things arrived
+in. Rewriting a section so it matches reality is correct; leaving a stale section beside a
+new one is not.
 
-### DESIGN.md — the source of truth for project design
-
-`DESIGN.md` holds the current stack, feature scope, architecture, and behavior. **This
-file (`CLAUDE.md`) does not duplicate any of it** — read `DESIGN.md` for design facts. If
-the two ever disagree, `DESIGN.md` is right and `CLAUDE.md` needs fixing.
-
-Unlike the records files, `DESIGN.md` is **edited in place**. It describes the present
-state, not the order things arrived in. Rewriting a section so it matches reality is
-correct; leaving a stale section beside a new one is not.
-
-Update `DESIGN.md` in the same working session whenever any of these changes:
+Update it in the same working session whenever any of these changes:
 - the stack — a library, service, provider, or deployment target added, swapped, or dropped
 - feature scope — something added, cut, or deferred
 - architecture — the retrieval pipeline, ingestion, storage schema, or API surface
 - app behavior — grounding, refusal paths, citations, streaming
-- one of its open questions gets decided
+- what the eval suite shows breaking, or a failure mode fixed
 - a shortcut or piece of technical debt is taken
 
-Also refresh its **Last updated** timestamp on every edit, in the format below.
+**It is capped at 1–2 pages.** It is an overview document: diagrams and main points with
+their reasoning, not an exhaustive account. When something new has to go in, decide what
+comes out — do not let it grow past the cap.
 
-Note `DESIGN.md` doubles as a graded deliverable capped at 1–2 pages. It will run longer
-than that while it serves as the working source of truth; it gets trimmed to the graded
-shape near the end. Do not trim it early to hit the page count.
-
-### The records file
-
-`DESIGN_RECORDS.md` is an append-only running record of what happened while this codebase
-was built. Append to it in the same working session as the change — do not defer it. Do
-not rewrite or delete past entries; add a new entry that supersedes an old one.
-
-The division of labor with `DESIGN.md`: a decision changes `DESIGN.md` to the new state
-*and* adds a `DESIGN_RECORDS.md` entry explaining the choice and what lost. `DESIGN.md`
-answers "what is it"; the records answer "why, and what else was on the table".
-
-### Timestamps — required on every entry in DESIGN_RECORDS.md
-
-Every entry carries one timestamp, directly under its heading:
-
-```
-**Timestamp:** 2026-08-11 21:31 -07:00
-```
-
-Format is `YYYY-MM-DD HH:MM ±HH:MM`, minute precision, local time with UTC offset. Read
-the real clock with `Get-Date -Format "yyyy-MM-dd HH:mm K"` — never estimate it and never
-carry forward a timestamp from an earlier entry.
-
-The single timestamp represents **both** when the decision was made and when it was
-recorded. Those are the same moment because entries are appended in the same working
-session as the change. If they ever diverge — a decision recorded later than it was made —
-say so in the timestamp line rather than presenting the recording time as the decision
-time:
-
-```
-**Timestamp:** 2026-08-11 21:31 -07:00 (decision made ~19:00, recorded late)
-```
-
-Do not fabricate precision. If a timestamp is approximate, mark it approximate.
-
-`DESIGN.md` uses the same format for its single **Last updated** line, which is replaced
-on every edit rather than appended to.
-
-### DESIGN_RECORDS.md
-
-Record, as they happen:
-
-1. **Architectural decisions and rejected tradeoffs** — chunking strategy and size,
-   embedding model, vector store, retrieval approach, prompt structure. For each, record
-   what was chosen, what was rejected, and why that fits this corpus and use case.
-2. **Failure analysis from the eval suite** — what the evals show breaking, and why.
-3. **Next steps** — scaling to 10,000 documents, multi-tenancy, cost controls, latency
-   budgets.
-4. **Known shortcuts and technical debt** — what was skipped on purpose given the time
-   box.
-
-Append to DESIGN_RECORDS.md when you:
-- choose or change a chunking strategy, chunk size, or overlap
-- choose or change the embedding model, vector store, or retrieval approach
-  (dense/hybrid/rerank, top-k, filters)
-- change the prompt structure or context assembly
-- reject an alternative that was seriously considered — record the rejection, not only the
-  winner
-- run the eval suite and see a new failure mode, or fix one
-- take a shortcut that would not ship — add it to the debt list immediately, while the
-  reason is still fresh
+Also refresh its **Last updated** line on every edit. Format is
+`YYYY-MM-DD HH:MM ±HH:MM`, minute precision, local time with UTC offset. Read the real
+clock with `Get-Date -Format "yyyy-MM-dd HH:mm K"` — never estimate it and never carry
+forward an earlier timestamp.
 
 ## Project Context
 
