@@ -21,11 +21,10 @@ heading. Verification notes worth keeping:
   on purpose: the corpus is generic-name only, so they exercise the rewriter's
   brand→generic normalization.
 
-Known scoring caveat: the three off-topic cases (spiders ×2, "Elon Musky") are filed
-as `unanswerable`, but the query gate refuses them as off_topic before retrieval and
-streams OFF_TOPIC_REFUSAL. `declined_unanswerable` looks for the no-context message
-or a "does not cover" admission, so these three report as failures even when the app
-behaves correctly. Recorded deliberately rather than silently mis-scored.
+Three unanswerable cases (spiders ×2, "Elon Musky") sit outside medicine entirely, so
+the query gate refuses them before retrieval and their expected answer is the gate's
+own OFF_TOPIC_REFUSAL. The other three name real drugs the corpus does not hold, which
+reach the not-in-corpus decline instead.
 
 Each question stays on one line, past the line limit where it has to, so a case reads
 as the question it asks rather than as wrapped fragments. Hence the per-file E501
@@ -33,7 +32,7 @@ ignore in pyproject.toml.
 """
 
 from eval.cases import EvalCase, ExpectedSource
-from messages import PERSONAL_ADVICE_REFUSAL
+from messages import OFF_TOPIC_REFUSAL, PERSONAL_ADVICE_REFUSAL
 
 UNANSWERABLE_ANSWER = (
     "The system states that the provided labeling does not cover this and answers "
@@ -185,7 +184,7 @@ SUITE: list[EvalCase] = [
         "increase the risk of bleeding events, and that concomitant aspirin, NSAIDs, other "
         "antiplatelet drugs, warfarin, and other anticoagulants add to that risk.",
     ),
-    # --- Unanswerable (6: three absent drugs, three outside the corpus entirely) ---
+    # --- Unanswerable (6: three drugs the corpus lacks, three outside medicine) ---
     EvalCase(
         id="unanswerable-metformin",
         question="What does the metformin labeling say about the risk of lactic acidosis?",
@@ -208,19 +207,19 @@ SUITE: list[EvalCase] = [
         id="unanswerable-spiders-tell",
         question="Tell me about spiders.",
         kind="unanswerable",
-        expected_answer=UNANSWERABLE_ANSWER,
+        expected_answer=OFF_TOPIC_REFUSAL,
     ),
     EvalCase(
         id="unanswerable-spiders-know",
         question="Do you know about spiders?",
         kind="unanswerable",
-        expected_answer=UNANSWERABLE_ANSWER,
+        expected_answer=OFF_TOPIC_REFUSAL,
     ),
-    EvalCase(For design
+    EvalCase(
         id="unanswerable-elon-musky",
         question="Who is Elon Musky?",
         kind="unanswerable",
-        expected_answer=UNANSWERABLE_ANSWER,
+        expected_answer=OFF_TOPIC_REFUSAL,
     ),
     # --- Personal medical advice (6: the gate must refuse before retrieval) ---
     EvalCase(

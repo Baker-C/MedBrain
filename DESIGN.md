@@ -164,10 +164,9 @@ cannot be flagged).
 - **`k=10` and `candidate_limit=10` are unmeasured** — the threshold sweep replays stored
   scores; the candidate count changes what is retrieved in the first place.
 - **Nothing counts sentinel drift** — the lenient reader makes it harmless and unobservable.
-- **The suite no longer tests discrimination.** Sibling labels are what make this corpus
-  hard, and the traps that measured it were cut; the scorer still supports them, so the
-  report's discrimination row now reads `n/a`. Three off-topic cases are also filed as
-  `unanswerable`, which the gate refuses differently, so they report as failures.
+- **Discrimination is unmeasured.** Sibling labels are what make this corpus hard, and no
+  case checks whether retrieval tells them apart. The scorer supports `forbidden_drugs`, so
+  the report carries the row and reads `n/a` for it.
 - The gate and rewriter still call the OpenAI SDK directly, off the one-client rule.
 - The frontend casts API responses instead of validating them.
 - Uses LangChain where unneeded (tech debt).
