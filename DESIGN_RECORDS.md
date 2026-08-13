@@ -2591,3 +2591,52 @@ of a test. A DB-backed retrieval test is the honest follow-up and is not built.
 **Still unmeasured.** No eval run has been made with a sparse leg that works. Every
 retrieval metric in this repository describes dense-only retrieval, whatever its
 configuration was labelled.
+
+
+## Sentinels are written strictly and read leniently
+
+**Timestamp:** 2026-08-12 18:47 -07:00
+
+**What changed.** `TAG_PATTERN` in `chat/context.py` and `COMPLETE_TAG` in
+`lib/sentinels.ts` both go from `[[S1]]` to `[[?S1]]?` — one bracket or two. The prompt
+and `sentinel()` are unchanged: `[[S1]]` is still what is asked for and still what is
+written into the context block.
+
+**Why.** The model drifts to single brackets on longer answers. Measured over the
+2026-08-12 run: **18 of 64 non-refused answers used `[S1]`**, and every one of them
+recorded an empty `tags` list. The user-visible cost is a citation rendered as dead
+literal text — `[S3] [S4]` sitting in the prose where two clickable sources belong.
+
+**The eval cost is worse, because it is invisible.** `unresolved_tags(trace.tags,
+trace.sources)` flags tags that resolve to nothing. An answer whose tags did not parse has
+*no* tags, so there is nothing to flag and the grounding check passes. The "grounding
+clean 18/18" result, and the claim that all 72 answers cited only actually-served chunks,
+were partly measuring answers that cited nothing the harness could see. Reading leniently
+takes the harness from 127 parsed citations to 193 over the same run — 66 citations across
+18 answers that previously scored as tagless.
+
+**Why not fix it in the prompt alone.** That was the earlier attempt: `530202d` added "in
+double brackets exactly as shown". The example that prompted this entry was produced after
+that change. A prompt cannot be a parser's contract when the same prompt is also asking
+for prose, and the failure is silent on both sides of the wire.
+
+**What was rejected.**
+
+- *Keeping the readers strict so drift stays visible.* That was the original call, on the
+  grounds that widening the regex hides how often the model misbehaves. It is wrong here:
+  the drift was not visible, it was invisible twice over — dead text in the UI and a
+  passing grounding check. Visibility belongs in a metric that counts drift, not in
+  breaking the feature.
+- *Repairing the answer text mid-stream.* Rewriting `[S1]` to `[[S1]]` in the transport
+  would make the backend edit a stream it deliberately passes through untouched. The
+  reader is the right place; the wire stays raw.
+
+**A complete `[S1]` is not withheld while streaming.** `TRAILING_PARTIAL_TAG` holds back
+unclosed fragments so a half-arrived sentinel never flashes as text. It now holds `[S`,
+`[S1`, `[[S1]` and friends, but deliberately not `[S1]`, which is already renderable —
+holding it would stall the last citation of every answer until the stream closed.
+
+**Not fixed: the metric that would have caught this.** Nothing counts how often the model
+drifts. The lenient reader makes the drift harmless but also makes it unobservable, which
+is the same trap in a new place. A drift counter on the eval trace is the honest follow-up
+and is not built.

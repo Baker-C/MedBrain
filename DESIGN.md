@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 18:31 -07:00
+**Last updated:** 2026-08-12 18:47 -07:00
 
 ---
 
@@ -453,7 +453,11 @@ test instead.
 Chunk metadata (drug, document, formulation, manufacturer, section number + title, chunk
 index, content hash, text/table flag) is the chunk's permanent identity and the real
 citation. At context-assembly time each retrieved chunk gets a per-query sentinel tag
-(`[[S1]]`, `[[S2]]`); the model emits only tags inline. **The tag→citation mapping is
+(`[[S1]]`, `[[S2]]`); the model emits only tags inline. **The sentinel is written
+strictly and read leniently** — the prompt and `sentinel()` use `[[S1]]`, but both readers
+(`chat/context.py`, `lib/sentinels.ts`) also accept `[S1]`, because the model drifts to one
+bracket on longer answers and a strict reader turns that into dead literal text where a
+citation belongs. **The tag→citation mapping is
 sent to the client as the first SSE event, before any tokens**, so citation resolution
 is client-side rendering — the backend never rewrites a stream. Event order: `sources` →
 `token`(s, sentinels passed through raw; client buffers split sentinels) → `done` (carries

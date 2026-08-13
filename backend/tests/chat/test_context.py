@@ -66,3 +66,11 @@ def test_emitted_tags_are_deduplicated_in_order_of_first_appearance() -> None:
 
 def test_no_tags_in_an_uncited_answer() -> None:
     assert emitted_tags("The provided labeling does not cover that.") == []
+
+
+def test_single_bracket_drift_is_still_read_as_a_citation() -> None:
+    """The model writes `[S1]` on longer answers. Reading only `[[S1]]` loses the
+    citation twice over: no link in the UI, and an empty tag list the eval's grounding
+    check cannot distinguish from an honestly uncited answer."""
+    answer = "Serotonin syndrome is potentially life-threatening. [S3] [S4]"
+    assert emitted_tags(answer) == ["S3", "S4"]

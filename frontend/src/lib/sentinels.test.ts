@@ -21,6 +21,15 @@ describe('toSegments', () => {
   it('leaves text with no tags untouched', () => {
     expect(toSegments('plain')).toEqual([{ kind: 'text', text: 'plain' }])
   })
+
+  it('reads the single-bracket form the model drifts to on longer answers', () => {
+    expect(toSegments('life-threatening. [S3] [S4]')).toEqual([
+      { kind: 'text', text: 'life-threatening. ' },
+      { kind: 'citation', tag: 'S3' },
+      { kind: 'text', text: ' ' },
+      { kind: 'citation', tag: 'S4' },
+    ])
+  })
 })
 
 describe('splitHeldSuffix', () => {
@@ -28,8 +37,12 @@ describe('splitHeldSuffix', () => {
     expect(splitHeldSuffix(`done ${partial}`)).toEqual({ ready: 'done ', held: partial })
   })
 
-  it('withholds nothing when the tag is complete', () => {
-    expect(splitHeldSuffix('done [[S1]]')).toEqual({ ready: 'done [[S1]]', held: '' })
+  it.each(['[S', '[S1'])('withholds the single-bracket partial %j', (partial) => {
+    expect(splitHeldSuffix(`done ${partial}`)).toEqual({ ready: 'done ', held: partial })
+  })
+
+  it.each(['done [[S1]]', 'done [S1]'])('withholds nothing when %j is complete', (text) => {
+    expect(splitHeldSuffix(text)).toEqual({ ready: text, held: '' })
   })
 })
 

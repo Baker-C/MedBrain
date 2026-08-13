@@ -6,6 +6,12 @@ their tags from the same position, so the two cannot disagree.
 
 A citation is a join: identity (document id, drug) comes from the document, location
 (section, page) from the chunk.
+
+**Written strictly, read leniently.** The prompt asks for `[[S1]]` and `sentinel()`
+writes that form, but the model drifts to `[S1]` on longer answers — 18 of 64 answers
+in the 2026-08-12 run. A strict reader turns that drift into dead literal text in the
+UI and, worse, into an empty tag list here, which the eval's grounding check reads as
+nothing-to-flag rather than as a broken answer. So one bracket or two is accepted.
 """
 
 import re
@@ -14,7 +20,7 @@ from collections.abc import Sequence
 from chat.contract import Citation, RetrievedChunk
 from persistence.rows import ChunkRow
 
-TAG_PATTERN = re.compile(r"\[\[(S\d+)\]\]")
+TAG_PATTERN = re.compile(r"\[\[?(S\d+)\]\]?")
 
 
 def tag_for(position: int) -> str:
