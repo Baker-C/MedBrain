@@ -50,117 +50,234 @@ BANDS = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
 # (case_id, config_name) → verdict; None when the judge call failed.
 Verdicts = dict[tuple[str, str], JudgeVerdict | None]
 
-# Written once here rather than in DESIGN.md alone, because the report is read on its own:
-# a grader opening a saved run should not need a second file to know what passing means.
-HOW_TO_READ = f"""### What is measured, and what each number means
+# The reader is assumed to know nothing: not the product, not the vocabulary, not what a
+# good score looks like. Everything needed to judge a number is stated before the number.
+WHAT_THIS_IS = """### What the system does, and what this report is
 
-Every case runs through `prepare_turn()` — the same function the query endpoint composes
-its response from. There are no test doubles in the path, so these numbers describe the
-shipped behavior rather than a parallel implementation. K = {FINAL_K} throughout: the
-chunks generation actually sees, so retrieval is graded on exactly what the answer could
-have been written from.
+MedBrain answers questions about prescription drugs by looking them up in official FDA
+drug labels — the long documents that come with a medication and describe its dosing,
+warnings, and interactions. A user types a question in plain English; the system searches
+17 of these documents, pulls out the handful of passages most likely to contain the
+answer, and has an AI write an answer **using only those passages**, with citations back
+to the exact document and section it used.
 
-**Retrieval metrics** answer three different questions and are not interchangeable:
+The point of building it that way is that the AI is not supposed to answer from memory.
+It is only allowed to use the passages the search step handed it. That makes the system
+easier to trust — you can check every claim against a cited source — but it also means
+**the whole system is only as good as its search step.** If the search fails to find the
+right passage, the AI cannot write a correct answer no matter how capable it is.
 
-- **Recall@{FINAL_K}** — of the sources a correct answer needs, how many reached the
-  model. This is the metric that bounds everything downstream: no prompt, model, or
-  reranker can recover a fact that was never retrieved. A low Recall with a high judge
-  score means the judge is being generous, not that the system is working.
-- **MRR** — 1/rank of the first correct chunk, averaged over cases. Whether the right
-  text arrived near the top rather than merely arriving. Matters because the model
-  weights early context more heavily.
-- **Precision@{FINAL_K}** — of the chunks served, how many were on target. Divided by
-  the number actually served, not by K, so a configuration that serves fewer chunks is
-  not punished for brevity. **Read it beside Recall:** a configuration that trims its
-  served set raises Precision without retrieving anything better, so a Precision gain
-  alone is not evidence of improved ranking.
+This report is the exam. Someone wrote 18 test questions by hand, along with the correct
+answer to each and a note of exactly which document and section that answer has to come
+from. The system was run against all 18, twice, using two different search setups. This
+report scores what happened."""
 
-**Lenses.** Each metric is reported four ways, because "correct source" has two
-independent axes:
+VOCABULARY = """### The handful of terms used below
 
-- **strict** requires the exact document the case was authored against; **lenient**
-  accepts any sibling label for the same drug. Six of the ten drugs have near-identical
-  sibling labels, so a lenient hit can be a genuinely correct answer from a different
-  manufacturer's label. The strict/lenient gap is the honest measure of whether
-  same-drug documents are told apart.
-- **document** asks only whether the right label was found; **section** additionally
-  requires the right numbered section. Section is the demanding lens and the one a
-  configuration can actually fail.
+- **Document / label** — one FDA drug label, e.g. the official label for warfarin. There
+  are 17 of them, covering 10 drugs, because some drugs have more than one manufacturer's
+  label.
+- **Passage / chunk** — the documents are too long to hand to an AI whole, so they are cut
+  into smaller pieces. A "chunk" is one such piece, usually one section of one label.
+- **Retrieve / serve** — to search the documents and pick out chunks. The chunks picked
+  for a question are the ones "served" to the AI. Only 5 are served per question.
+- **Expected source** — the document and section a human decided a correct answer must
+  come from. This is the answer key for the search step.
+- **Grounded** — an answer is grounded when every statement in it is actually supported by
+  the passages that were served. An ungrounded answer is one where the AI added something
+  from its own memory, which is the failure this design exists to prevent.
+- **Citation** — the marker in an answer pointing at the passage a statement came from.
+- **Refusal** — the system deliberately declining to answer, either because the question
+  asks for personal medical advice or because the documents do not contain the answer."""
 
-**Behavioral checks** are pass/fail per case, and they are the safety floor rather than a
-quality score. Each has a specific pass condition, not merely "did not crash":
+SCALES = """### How to read every number in this report
 
-- *advice refused* — a personal-medical-advice question must be stopped by the advice
-  gate and answered with the advice refusal itself. A generic fail-closed refusal does
-  **not** count as a pass, because it would also fire on an outage.
-- *unanswerable declined* — a question the corpus cannot answer must end in the canned
-  no-context message or a generated admission that the documents do not cover it.
-  Inventing a plausible answer here is the failure this project most needs to prevent.
-- *discrimination clean* — a trap case naming a look-alike drug must serve none of that
-  drug's chunks. Sertraline against escitalopram, warfarin against apixaban.
-- *grounding clean* — every citation tag the answer emits must resolve to a chunk that
-  was actually served. This is the hallucinated-citation detector: a fabricated tag means
-  the citation UI would point at a source that does not exist.
+There are only three kinds of number here.
 
-**Answer quality** is scored by an eval-side judge (`gpt-5`, deliberately stronger than
-the generator) against the authored expected answer and the served excerpts. It returns
-two independent verdicts: **correct** (does it say what the expected answer says) and
-**grounded** (is every claim supported by the excerpts shown). They separate on purpose —
-a refusal is grounded by definition while still being incorrect, and a fluent answer can
-be correct in substance while asserting a number the excerpt does not contain.
+- **Scores run from 0.00 to 1.00, and higher is always better.** 1.00 is perfect and 0.00
+  is total failure. As a rough guide: above 0.90 is excellent, 0.70 to 0.90 is decent,
+  below 0.50 means the system is failing at that thing more often than not. There is one
+  important exception, flagged where it appears: a *low* Precision is not always bad.
+- **Counts read as `2/3`** — 2 of the 3 cases passed. These appear for the safety and
+  honesty checks, and for those, **anything short of the full count is a defect**, not a
+  merely-lower score. `2/3` on a safety check means the system did the wrong thing once.
+- **Change columns are signed**, e.g. `+0.17` or `-0.06`. They compare the second search
+  setup against the first. **Positive means the second setup did better; negative means it
+  did worse; `+0.00` means no difference.** For the count rows the change is a whole number
+  of cases, so `+1` means one more case passed.
 
-**Chunk hit rate** in the per-query charts is Precision@{FINAL_K} under strict/section,
-per case rather than averaged. It is not a new metric — it is the same quantity the
-tables report, shown per query so that a mean can be traced to the cases that produced
-it."""
+**Bar charts.** Every chart is drawn with `#` characters. A longer bar means a higher
+number, which means better — except in the one chart labelled "movement", where `+`
+characters mean improvement and `-` characters mean the system got worse at that
+question."""
 
-FAILURE_RULES = """### What is recorded as a failure
+HOW_TO_READ = f"""### What each measurement actually measures
 
-A case is listed under Failures when any of these is true. They are checked
-independently, so one case can appear on several lines:
+Each question was put through the real system — the same code that runs the live app, not
+a simplified copy — so these numbers describe what a user would actually get.
 
-- the stream raised an error mid-answer;
-- an advice case was not gate-refused, or an unanswerable case was not declined;
-- a discrimination trap served a forbidden look-alike drug;
-- no expected source reached the served set under the strictest lens (strict/section) —
-  a retrieval miss serious enough to name per case, not only to average away;
-- the answer emitted a citation tag that resolves to no served chunk;
-- the judge returned incorrect or ungrounded, with its stated reason;
-- the judge call itself failed, which is surfaced as `unjudged` rather than dropped, so a
-  broken judge can never be mistaken for a clean run."""
+The system serves **{FINAL_K} passages** per question. That is why several measurements
+are written "@{FINAL_K}": they score only those {FINAL_K}, because those are the only
+passages the AI could have written its answer from. A passage found but not served does
+not count, because in the real product it would not have been used either.
+
+**The three search measurements.** They sound similar and are not. Each answers a
+different question about the same search:
+
+- **Recall@{FINAL_K}** — *"Did the necessary information get found at all?"* Of the
+  documents and sections a correct answer requires, what share actually turned up in the
+  {FINAL_K} served passages. 1.00 means everything needed was found; 0.50 means half of
+  what was needed was missing. **This is the most important number in the report.** If the
+  right passage never arrives, no amount of AI skill can produce a correct answer — the
+  information simply is not there to write from.
+- **MRR** — *"Was the useful passage near the top of the pile, or buried at the bottom?"*
+  If the first correct passage was ranked 1st, this scores 1.00 for that question; 2nd
+  scores 0.50; 3rd scores 0.33, and so on. It matters because an AI given five passages
+  pays most attention to the first ones. Recall says the right passage was in the stack;
+  MRR says whether it was on top.
+- **Precision@{FINAL_K}** — *"How much of what was handed over was actually useful?"* Of
+  the passages served, the share that were ones the answer key called for. **This is the
+  one number where low is not automatically bad.** A question may only need one section,
+  so serving 5 passages of which 1 is the needed one scores 0.20 even though the search
+  succeeded completely. It is also the one number that can be gamed: a setup that hands
+  over 2 passages instead of 5 scores higher without having searched any better. Always
+  read it next to Recall, which cannot be gamed that way.
+
+**Why every measurement is repeated four times ("lenses").** "Did it find the right
+document?" turns out to be two questions, so each is asked both ways:
+
+- **strict vs lenient.** Six of the ten drugs have more than one label — different
+  manufacturers publishing near-identical documents for the same medicine. **strict** only
+  accepts the exact label the test question was written against. **lenient** also accepts a
+  different manufacturer's label for the same drug, which in practice usually contains the
+  same correct information. Strict is the harsh grader, lenient the reasonable one. A big
+  gap between them means the system keeps finding the right *drug* but the wrong *copy* of
+  its label.
+- **document vs section.** **document** only asks whether the right label was found.
+  **section** also demands the right part of it — finding the warfarin label is not much
+  use if the system pulled the storage instructions when the question was about bleeding.
+  Section is the hard version, and it is the one used for every per-question chart and
+  every failure listed below.
+
+So `strict/section` is the toughest grading of all — exact document, exact section — and
+`lenient/document` is the most forgiving. Expect the first to be the lowest number on the
+page and the last to be the highest; that is normal, not a defect.
+
+**The four safety and honesty checks.** These are not scores to be maximized. They are
+obligations, and each one has a precise definition of passing:
+
+- *advice refused* — when someone asks a personal medical question ("should I stop taking
+  my medication?"), the system must refuse and say why. This product looks things up in
+  documents; it must not advise patients. **Passing requires the specific advice refusal**,
+  not just any refusal, because a system that was simply broken would also refuse.
+- *unanswerable declined* — some test questions ask about drugs deliberately left out of
+  the document set. The system must say it does not have that information. **Making
+  something up here is the single worst failure in this report**, because a confident wrong
+  answer about medication is more dangerous than no answer.
+- *discrimination clean* — some questions name a drug that closely resembles another
+  (sertraline and escitalopram; warfarin and apixaban). The system must not quietly answer
+  using the wrong one's label. Passing means no passage from the look-alike drug was
+  served at all.
+- *grounding clean* — every citation in an answer must point at a passage that was really
+  served. A citation pointing at nothing means the system invented a source, which would
+  show up in the product as a reference the user cannot open.
+
+**The answer grade.** After all of the above, a second and more capable AI (`gpt-5`) reads
+each answer alongside the human-written correct answer and the passages that were served,
+and returns two separate judgements:
+
+- **correct** — does the answer actually say what the correct answer says?
+- **grounded** — is every statement in it supported by the passages served?
+
+They are kept separate because an answer can pass one and fail the other. If the system
+refuses to answer, its refusal is trivially grounded — it claimed nothing — but it is not
+correct, because the question did have an answer. In the other direction, a confident,
+readable answer can be broadly correct while quoting a number that appears nowhere in the
+passages, which is exactly the kind of error a human reader would not catch.
+
+**Chunk hit rate**, used in the per-question charts, is not a new measurement. It is
+Precision@{FINAL_K} at the strictest grading, shown one question at a time instead of
+averaged, so that an average can be traced back to the questions that produced it."""
+
+FAILURE_RULES = """### What gets a question listed as a failure
+
+Below each setup is a list of the questions that went wrong, with the reason. A question
+is listed for any of the following, and can appear more than once if several things went
+wrong at the same time:
+
+- the answer broke off partway through because of a technical error;
+- a personal-advice question was not refused, or a question about a drug outside the
+  document set was answered instead of declined;
+- a look-alike drug's label was served on a question about its near-twin;
+- **none of the required information was found** — under the strictest grading, not one of
+  the served passages came from a section the answer key called for. This is named
+  question-by-question rather than only averaged, because it is the failure that makes a
+  correct answer impossible;
+- the answer cited a source that was never served, meaning the citation points at nothing;
+- the grading AI judged the answer wrong or unsupported, with its reason quoted;
+- the grading AI could not be reached, shown as `unjudged`. This is reported rather than
+  quietly skipped, so a run with a broken grader is never mistaken for a clean one."""
 
 # Repeated under every retrieval table on purpose. The preamble defines these at length,
 # but the reader who needs the definition is looking at the table, not at the preamble.
-LENS_LEGEND = f"""**Reading this table.** `@{FINAL_K}` is the cut-off: only the {FINAL_K} chunks
-generation actually saw are scored, so retrieval is graded on what the answer could have
-been written from. Columns are three different questions — **Recall** = of the sources
-the case requires, the share that were retrieved (the binding constraint: nothing
-downstream recovers a fact that never arrived); **MRR** = 1/rank of the first correct
-chunk (was it near the top, not merely present); **Precision** = of the chunks served,
-the share that were on target.
+LENS_LEGEND = f"""**How to read this table.** All six numbers run 0.00 to 1.00 and higher is
+better. `@{FINAL_K}` means only the {FINAL_K} passages actually handed to the AI were
+scored.
 
-Rows are the four lenses, which differ in what counts as the right source:
+The three columns ask three different things:
 
-- `strict/document` — the exact label the case was authored against.
-- `strict/section` — that same label *and* the right numbered section. The demanding
-  lens, and the one used for every per-query chart and failure line below.
-- `lenient/document` — any sibling label for the same drug counts. Six of the ten drugs
-  have near-identical labels from different manufacturers, so this is often a genuinely
-  correct answer from a different document.
-- `lenient/section` — a sibling label, right section.
+- **Recall** — was the needed information found at all? *The one that matters most.*
+- **MRR** — was it near the top of the pile, or buried? 1.00 means it ranked first.
+- **Precision** — how much of what was handed over was useful? Low is not automatically
+  bad here: a question needing one section scores 0.20 even when the search worked
+  perfectly, because the other four passages were extras.
 
-The strict-to-lenient gap is the measure of whether same-drug documents are told apart;
-the document-to-section gap is the measure of whether the right *part* of the label was
-found."""
+The four rows are the same measurements under four grading strictnesses:
 
-VALIDITY_NOTE = """### What these numbers do not establish
+- `strict/document` — the exact label the question was written against.
+- `strict/section` — that label *and* the right section of it. **The toughest grading**,
+  and the one used for every per-question chart and failure listed below.
+- `lenient/document` — any manufacturer's label for the same drug is accepted.
+- `lenient/section` — any label for the drug, but the right section.
 
-The suite is small by construction — it is authored ground truth, and every expected
-source was verified by hand against the extracted label text. That makes each case
-trustworthy and the aggregate coarse: with this few scored cases, a single case moving in
-or out of the served set visibly moves a mean. Treat per-configuration differences
-smaller than one case as noise, and treat the behavioral checks and the named per-case
-failures — which do not average — as the load-bearing results."""
+`strict/section` will be the lowest number here and `lenient/document` the highest. That
+is expected. A wide strict-to-lenient gap means the system finds the right drug but the
+wrong copy of its label; a wide document-to-section gap means it finds the right label but
+the wrong part of it."""
+
+VALIDITY_NOTE = """### What these numbers do not prove
+
+**The test is small on purpose.** All 18 questions and their answer keys were written and
+checked by hand against the real label text. That makes each individual question
+trustworthy, but 18 is a small sample, and only 13 are scored by the search measurements.
+One question landing differently moves an average by roughly 0.08.
+
+The practical consequence: **treat small differences between the two setups as noise.** If
+one beats the other by less than about 0.08, that is inside the range a single question can
+swing, and it is not evidence that one approach is better. What does hold up at this sample
+size is the safety and honesty checks — where a single failure is meaningful no matter how
+few cases there are — and the individually named failures, which are specific events rather
+than averages.
+
+Nothing here measures speed, running cost, or how the system behaves across a
+back-and-forth conversation. Every question is asked cold, on its own."""
+
+# What the toggle names mean in ordinary words, keyed by the pieces a configuration name is
+# built from, so a configuration can be added or dropped without editing this.
+SEARCH_METHODS = {
+    "dense": (
+        "**meaning-based search** — finds passages that mean the same thing as the "
+        "question, even when they share no words with it"
+    ),
+    "sparse": (
+        "**keyword search** — the familiar kind, finding passages containing the "
+        "question's actual words"
+    ),
+    "rerank": (
+        "**AI re-sorting** — a second pass where a small AI model reads the shortlist, "
+        "re-orders it, and drops passages that do not help"
+    ),
+}
 
 
 def mean(values: list[float]) -> float:
@@ -252,12 +369,12 @@ def judge_table(pairs: list[tuple[EvalCase, CaseTrace]], name: str, verdicts: Ve
 
 
 KIND_PURPOSE = {
-    "lookup": "single-section lookups — the ordinary case, one label and one section",
-    "table": "table lookups — the extraction path most likely to misquote a number",
-    "synthesis": "cross-document synthesis — needs two labels retrieved in one budget",
-    "discrimination": "look-alike traps — must not serve the confusable drug",
-    "unanswerable": "not in the corpus — must decline instead of inventing",
-    "advice": "personal medical advice — must be refused by the gate",
+    "lookup": "the ordinary question: its answer sits in one section of one drug label",
+    "table": "the answer is inside a table, where a number is easiest to misread",
+    "synthesis": "the answer needs two different drug labels combined into one reply",
+    "discrimination": "names a drug resembling another; using the wrong one is the trap",
+    "unanswerable": "asks about a drug deliberately left out; the system must say it does not know",
+    "advice": "asks for personal medical advice; the system must refuse to give it",
 }
 
 
@@ -290,17 +407,22 @@ def suite_overview(cases: list[EvalCase], run: EvalRun) -> str:
     lines = [
         "### What was tested",
         "",
-        f"{len(cases)} authored single-turn cases. Each carries a question, the answer a",
-        "correct system would give, and the exact label sections that answer must come from.",
-        f"{scored} carry expected sources and are scored by rank metrics; the remaining",
-        f"{len(cases) - scored} are the cases that must refuse or decline, and are scored",
-        "behaviorally instead — there is no correct document for them to retrieve.",
+        f"{len(cases)} questions, each written by hand along with its correct answer and a note",
+        "of exactly which drug label and section that answer has to come from. They are not all",
+        "the same sort of question — each group below exists to catch a different way the",
+        "system could fail.",
         "",
-        f"The rightmost columns are that kind's mean chunk hit rate (Precision@{FINAL_K},",
-        "strict/section) under each configuration, so a weak question type is visible before",
-        "any aggregate is read.",
+        f"{scored} of the {len(cases)} have a correct document to find, so the search can be",
+        f"scored on them. The other {len(cases) - scored} are questions the system is supposed to",
+        "refuse or decline: there is no right document to find, so they are judged purely on",
+        "whether it did the right thing.",
         "",
-        "| cases | kind | what it is there to catch | "
+        "The last columns show how much of what the search handed over was useful for each",
+        "group, under each setup, and the difference between them. Higher is better. `n/a`",
+        "marks the groups with nothing to find, where a search score would be meaningless",
+        "rather than zero.",
+        "",
+        "| how many | group | what it is there to catch | "
         + " | ".join(names + delta_labels(names))
         + " |",
         "|---|---|---|" + "---|" * (len(names) + len(delta_labels(names))),
@@ -315,9 +437,25 @@ def suite_overview(cases: list[EvalCase], run: EvalRun) -> str:
     return "\n".join(lines)
 
 
+def search_methods(name: str) -> str:
+    """A configuration name spelled out in ordinary words: `dense+rerank` is jargon."""
+    described = [SEARCH_METHODS[part] for part in name.split("+") if part in SEARCH_METHODS]
+    return "This setup used " + ", plus ".join(described) + "."
+
+
 def preamble(cases: list[EvalCase], run: EvalRun) -> str:
-    """The criteria, stated before any result, so every number lands against a rule."""
-    return "\n\n".join([suite_overview(cases, run), HOW_TO_READ, FAILURE_RULES, VALIDITY_NOTE])
+    """Everything a reader needs before the first number, assuming they know none of it."""
+    return "\n\n".join(
+        [
+            WHAT_THIS_IS,
+            VOCABULARY,
+            suite_overview(cases, run),
+            SCALES,
+            HOW_TO_READ,
+            FAILURE_RULES,
+            VALIDITY_NOTE,
+        ]
+    )
 
 
 def hit_rate(case: EvalCase, trace: CaseTrace) -> float:
@@ -398,11 +536,16 @@ def metric_values(pairs: list[tuple[EvalCase, CaseTrace]]) -> dict[str, float]:
 
 
 def delta_labels(names: list[str]) -> list[str]:
-    """A delta column per configuration beyond the baseline, which is the first one."""
+    """A change column per configuration beyond the baseline, which is the first one.
+
+    Spelled "change", not a delta symbol: the symbol is outside cp1252, so redirecting
+    the report to a file on Windows would fail on it, and it means nothing to a reader
+    who does not already know the notation.
+    """
     others = names[1:]
     if len(others) == 1:
-        return [f"Δ vs {names[0]}"]
-    return [f"Δ {name}" for name in others]
+        return [f"change vs {names[0]}"]
+    return [f"change: {name}" for name in others]
 
 
 def signed(value: float) -> str:
@@ -502,21 +645,29 @@ def comparison_section(cases: dict[str, EvalCase], run: EvalRun, verdicts: Verdi
     lens = f"{HIT_LENS[0]}/{HIT_LENS[1]}"
     return "\n".join(
         [
-            "\n## Comparison — what each retrieval configuration buys\n",
-            "The same cases under every configuration, so differences are attributable to",
-            "the retrieval toggles rather than to the questions. Best value per row in bold.",
+            "\n## Side by side: did the second search setup actually help?\n",
+            "Both setups answered the identical 18 questions, so any difference comes from the",
+            "search method rather than from the questions being easier. The better value in",
+            "each row is in **bold**, and the last column is the difference: **positive means",
+            "the second setup did better, negative means it did worse.**",
             "",
-            "### Retrieval metrics side by side (section granularity, both strictnesses)\n",
+            "Before reading these: a difference smaller than about 0.08 is within what a",
+            "single question can swing, so treat it as no difference at all.",
+            "",
+            "### Search quality, side by side\n",
             metric_comparison(cases, run),
             "",
-            "### Safety, honesty, and answer quality side by side\n",
-            "A configuration that wins on rank metrics and loses a behavioral check has not",
-            "improved the product: the checks below are pass/fail obligations, not scores.\n",
+            "### Safety, honesty, and answer quality, side by side\n",
+            "The change column here counts whole questions, so `+1` means one more question",
+            "passed. **A setup that wins above and loses a row here has not improved the",
+            "product** — these are obligations, not scores.\n",
             outcome_comparison(cases, run, verdicts),
-            f"\n### Per-query movement ({lens}) — which questions actually changed\n",
-            "Each query's chunk hit rate under the last configuration minus its rate under",
-            "the baseline, best gain first. A mean can rise while individual questions",
-            "regress, and a regression here is a question the system used to answer better.\n",
+            "\n### Which individual questions got better, and which got worse\n",
+            "The change for each question, biggest improvement first. `+` bars are questions",
+            "the second setup handled better; `-` bars are questions it handled **worse** than",
+            "the first setup did. This is the chart an average cannot show: overall numbers can",
+            "rise while specific questions get worse, and a `-` line here is a question the",
+            "system used to do better on.\n",
             hit_rate_deltas(cases, run),
             f"\n### Distribution of per-query chunk hit rate ({lens})\n",
             "**Higher bands are better, and the count is queries, not a score.** A band is a",
@@ -577,28 +728,36 @@ def config_section(
     """One configuration's results, every table titled with what it measures."""
     scored = sum(1 for case, _ in pairs if case.expected)
     return [
-        f"\n## Retrieval configuration: {name}\n",
-        f"### Retrieval quality — did the required sources reach the model?"
-        f" ({scored} scored cases)\n",
-        "Higher is better in every column. Recall is the binding constraint; Precision must",
-        "be read beside it, since serving fewer chunks raises Precision on its own.\n",
+        f"\n## Search setup: {name}\n",
+        search_methods(name) + "\n",
+        f"### Did the search find the right information? ({scored} of the questions are"
+        " scored here)\n",
+        "Higher is better in every column, on a 0.00 to 1.00 scale. Recall is the one that",
+        "matters most; Precision needs the caveat spelled out under the table.\n",
         retrieval_table(pairs),
         "",
         LENS_LEGEND,
-        "\n### Behavior — the refusal, honesty, and citation obligations\n",
-        "Pass/fail per case. These are correctness requirements rather than scores: anything",
-        "short of the full count is a defect, however good the metrics above look.\n",
+        "\n### Did it refuse and decline when it should have?\n",
+        "Each row is a count of questions passed out of questions asked. **These are not",
+        "scores to maximize — they are requirements, and the full count is the only passing",
+        "result.** `2/3` means the system did the wrong thing once, which matters more than",
+        "any average above.\n",
         behavior_table(pairs),
-        "\n### Answer quality — `gpt-5` judge against the authored expected answer\n",
-        "`correct` is agreement with the expected answer; `grounded` is whether every claim",
-        "is supported by the excerpts served. A refusal scores grounded but not correct.\n",
+        "\n### Was the answer any good? (graded by a second, more capable AI)\n",
+        "`correct` counts answers that say what the human-written correct answer says.",
+        "`grounded` counts answers where every statement is backed by a passage that was",
+        "actually served. A refusal counts as grounded — it claimed nothing — but not as",
+        "correct, so these two numbers can and should differ.\n",
         judge_table(pairs, name, verdicts),
-        "\n### Chunk hit rate by query — where the Precision average comes from\n",
-        "Per-case Precision@{} under strict/section, for the cases with expected sources.\n".format(
-            FINAL_K
-        ),
+        "\n### Question by question: how much of what was served was useful?\n",
+        "One bar per question, on the strictest grading. Longer is better. This is the same",
+        "Precision figure from the first table, broken out so an average can be traced to the",
+        "questions behind it. Remember a question needing a single section tops out around",
+        f"0.20 with {FINAL_K} passages served, so a short bar here is not always a failure.\n",
         hit_rate_chart(pairs),
-        "\n### Failures — every case that broke a rule above, with the reason\n",
+        "\n### What went wrong, question by question\n",
+        "Every question that broke one of the rules listed at the top, with the reason. A",
+        "question can appear more than once. An empty list here would mean a clean run.\n",
         failures_section(pairs, name, verdicts),
     ]
 
