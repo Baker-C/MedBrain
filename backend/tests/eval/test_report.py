@@ -51,7 +51,7 @@ def test_report_renders_metrics_and_failures(make_chunk_trace: MakeChunk) -> Non
     }
     report = render_report(CASES, run, verdicts)
 
-    assert "## Search setup: dense" in report
+    assert "## Retrieval configuration: dense" in report
     assert "| strict/section | 1.00 | 1.00 |" in report  # the planted hit, top-ranked
     assert "advice question was not gate-refused" in report
     assert "hallucinated citation tags: S9" in report
@@ -73,7 +73,7 @@ def test_preamble_states_the_criteria_and_counts_the_suite(make_chunk_trace: Mak
     report = render_report(CASES, run, {})
 
     assert "### What was tested" in report
-    assert "2 questions, each written by hand" in report
+    assert "2 hand-authored cases" in report
     # Each kind carries its own hit rate. The lookup case's single served chunk hits;
     # the advice case has no expected source, so a retrieval score would be meaningless
     # rather than zero.
@@ -82,10 +82,10 @@ def test_preamble_states_the_criteria_and_counts_the_suite(make_chunk_trace: Mak
     assert "| n/a |" in report
     # Every criteria block the reader needs to judge a number.
     assert "### What each measurement actually measures" in report
-    assert "### What gets a question listed as a failure" in report
-    assert "### What these numbers do not prove" in report
+    assert "### What is recorded as a failure" in report
+    assert "### What these numbers do not establish" in report
     # The criteria precede the results.
-    assert report.index("### What each measurement") < report.index("## Side by side")
+    assert report.index("### What each measurement") < report.index("## Comparison")
 
 
 def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> None:
@@ -102,8 +102,8 @@ def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> Non
     )
     report = render_report(CASES, run, {})
 
-    assert "## Side by side" in report
-    assert "| metric | dense | sparse | change vs dense |" in report
+    assert "## Comparison" in report
+    assert "| metric | dense | sparse | Δ vs dense |" in report
     # The delta is signed and measured against the first configuration in the run.
     assert "| Recall@5 (strict/section) | **1.00** | 0.00 | -1.00 |" in report
     # A behavioral count delta is a whole number of cases, not a rate.
