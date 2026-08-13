@@ -15,7 +15,7 @@ from psycopg.rows import TupleRow
 from persistence.rows import ChunkRow
 from retrieval.config import RetrievalConfig
 from retrieval.contract import HistoryMessage, Refusal, Retrieved, ScoredChunk
-from retrieval.query.advice_gate import run_advice_gate
+from retrieval.query.query_gate import run_query_gate
 from retrieval.query.query_rewriter import run_query_rewriter
 from retrieval.ranking.fusion import fuse_rankings
 from retrieval.ranking.reranker import RerankerModel, run_reranker
@@ -37,7 +37,7 @@ def prepare_query(
     """Gate, then rewrite. Each tool is toggleable; a refusal stops the pipeline,
     and with both toggles off the raw query proceeds without any LLM call."""
     if config.gate:
-        refusal = run_advice_gate(client, query, history)
+        refusal = run_query_gate(client, query, history)
         if refusal is not None:
             return refusal
     if config.rewrite:
