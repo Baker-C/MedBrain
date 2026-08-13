@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 15:12 -07:00
+**Last updated:** 2026-08-12 17:58 -07:00
 
 ---
 
@@ -40,7 +40,7 @@ Built as a take-home assignment. The full spec is in
 | Store | Supabase Postgres + `pgvector` — one store for chunks, embeddings, conversations, and app data. Schema ships as versioned SQL migrations applied by `python -m persistence.migrate` (psycopg) |
 | Embeddings | OpenAI `text-embedding-3-large`, truncated to **1536 dims** via the API `dimensions` param — pgvector HNSW caps at 2000 dims, so native 3072 would force sequential scans |
 | Keyword search | Postgres full-text (`tsvector` generated column, GIN index, `websearch_to_tsquery` + `ts_rank`) as the sparse half of hybrid — deliberately **not** BM25; see known debt |
-| Generation LLM | OpenAI `gpt-5-mini`, streamed via `ChatOpenAI.astream` — cheap, sufficient for grounded extraction over the 8 provided chunks. Also runs the **advice gate** and **query rewriter** calls |
+| Generation LLM | OpenAI `gpt-5-mini`, streamed via `ChatOpenAI.astream` — cheap, sufficient for grounded extraction over the 5 provided chunks. Also runs the **query gate** and **query rewriter** calls |
 | Reranker LLM | OpenAI `gpt-5-nano` — scores 20 short passages as JSON; cheapest reliable scorer wins |
 | Eval judge LLM | OpenAI `gpt-5` — deliberately stronger than the generator; runs per eval suite, not per query |
 | Corpus files | Private **Supabase Storage bucket** is the source of truth; `DocumentCorpus/` in the repo is the seed copy, pushed up by a one-time local upload script. Backend mints short-lived (~5 min) signed URLs; file bytes never pass through the backend |
@@ -57,7 +57,7 @@ no further caching layer goes in without asking first. Ingestion idempotency
 (`content_hash` unique constraint) is a spec requirement, not a cache, and stays.
 
 **LangChain's scope is one rule with no exceptions: `langchain-openai`'s `ChatOpenAI` is
-the model client for every LLM call** — generation, advice gate, query rewriter, reranker —
+the model client for every LLM call** — generation, query gate, query rewriter, reranker —
 and its `OpenAIEmbeddings` is the embeddings client for both ingestion and query embedding.
 Nothing else in LangChain is used, deliberately. Its retrievers and `PGVector` store are
 declined because retrieval is hand-built SQL (HNSW + `ts_rank` + RRF) and `PGVector` keeps
@@ -258,15 +258,24 @@ is set** — the
 gpt-5 family only accepts its default; determinism comes from the sort living in code,
 not from the sampler. That sort is stable, so ties keep RRF order, and a response that
 fails to score every candidate exactly once is discarded whole rather than partially
-applied — the fused order stands. Numeric scores are kept for the eval trace. **Top 8**
-go to generation. Chosen over a local cross-encoder (torch bulk would fatten the lean
+applied — the fused order stands. Numeric scores are kept for the eval trace.
+
+**Relevance threshold: `rerank_score >= 3`.** Candidates the reranker scored below 3 are
+dropped before the final cut, and **filtering to zero is the decline path** — the caller
+streams the not-in-corpus message and never makes the generation call, reusing the
+existing empty-chunk branch with no new code. An *unscored* chunk passes: `rerank_score`
+is None both when the reranker is off and when its call failed open, and neither is a
+judgement against the chunk, so a single bad OpenAI call cannot black out every query.
+The 3 was read off the score distribution of a real run, not guessed — see
+`DESIGN_RECORDS.md`. Then **top 5** go to generation. Chosen over a local cross-encoder (torch bulk would fatten the lean
 backend container) and over a hosted rerank API (extra vendor).
 
 **The built shape.** `retrieval/config.py` holds one frozen `RetrievalConfig` carrying
 every switch (`gate`, `rewrite`, `sparse`, `rerank`) and every cut-off
-(`candidate_limit=40`, `rrf_k=60`, `fused_limit=20`, `final_limit=8`). It is passed in,
+(`candidate_limit=10`, `rrf_k=60`, `fused_limit=20`, `final_limit=5`,
+`min_rerank_score=3`). It is passed in,
 never read from ambient state. `pipeline.run_retrieval()` is the single entry point —
-gate → rewrite → embed → dense + sparse → fuse → rerank → cut — returning either a
+gate → rewrite → embed → dense + sparse → fuse → rerank → filter → cut — returning either a
 `Refusal` or a `Retrieved` (the query actually searched, plus the chunks that survived).
 Each survivor is a `ScoredChunk`: the `ChunkRow` plus its dense rank, sparse rank, RRF
 score, and rerank score — that is what the eval trace reads and what generation cites
@@ -282,7 +291,7 @@ lives in `pipeline.py`. Both search legs select their columns from
 **Package layout — the folders are the pipeline stages.** `retrieval/` holds `config.py`
 (the switches), `contract.py` (the vocabulary callers speak — `HistoryMessage`,
 `ScoredChunk`, `Refusal`, `Retrieved`), `pipeline.py` (composition only), and three stage
-packages: **`query/`** (advice gate, query rewriter, and the transcript rendering they
+packages: **`query/`** (query gate, query rewriter, and the transcript rendering they
 share) → **`search/`** (embeddings client, dense leg, sparse leg, and the chunk columns
 plus row reader they share) → **`ranking/`** (RRF fusion, LLM reranker). Callers import
 `retrieval.contract` and `retrieval.pipeline`; the stage packages are internal. Each
@@ -301,11 +310,16 @@ prevent.
 They are two self-contained tools in `retrieval/query/`, each with its own prompt,
 response schema, and `gpt-5-mini` structured-output call on the raw query
 (+ conversation history), composed by `retrieval/pipeline.py`'s `prepare_query()`:
-gate first — a refusal stops the pipeline — then rewrite. The **advice gate**
-(`advice_gate.py`): a single binary personal-medical-advice flag, nothing wider —
-off-topic questions fall through to the honest not-in-corpus path. It **fails closed**:
-if its call errors, the query is refused with a distinct "can't process right now"
-message rather than answered ungated. The **query rewriter** (`query_rewriter.py`):
+gate first — a refusal stops the pipeline — then rewrite. The **query gate**
+(`query_gate.py`): one call returning one reason — `personal_advice`, `unsafe`,
+`off_topic`, or `none` — and each refusing reason has its own pre-written message, so a
+harm-seeking question is not told it asked for personal medical advice. `unsafe` is
+harm-*seeking*, not dangerous-*sounding*: describing a label's overdose or toxicity
+section is the tool's job and passes. `off_topic` means outside medicine entirely
+(spiders, the weather); a question about a drug the corpus may not hold is on topic and
+falls through to the honest not-in-corpus path. It **fails closed**: if its call errors,
+the query is refused with a distinct "can't process right now" message rather than
+answered ungated. The **query rewriter** (`query_rewriter.py`):
 contextualizes the question into a standalone query using history and normalizes it
 (brand → generic drug names, abbreviations expanded); the one rewritten string feeds
 both retrieval legs. It **fails open**: a failed rewrite falls back to the raw query —
@@ -473,8 +487,8 @@ click-through correctly. Revisit if the ambiguity reads badly in the UI.
 empty chunk list both stream through the same canned-response helper — `sources` with an
 empty mapping, one `token` carrying the pre-written text, then `done` — so a canned answer
 reaches the client through exactly the contract a generated one does. The empty-chunk case
-is also where the pre-announced relevance threshold lands: filtering to zero produces the
-decline path with no extra branch and no generation spend.
+is also where the relevance threshold lands: filtering to zero produces the decline path
+with no extra branch and no generation spend.
 
 **A failure partway through a stream ends in `error`, not `done`.** The client has already
 rendered part of an answer, so a dropped generation call emits an `error` event carrying a
@@ -649,7 +663,7 @@ Known scaling limits already identified:
   normalization and term saturation. The planned `rank_bm25` comparison was dropped on
   scope; the graded eval delta is hybrid-vs-dense, not ts_rank-vs-BM25. Never describe
   the sparse leg as "BM25".
-- The advice gate and query rewriter still call the OpenAI SDK directly, so the "every
+- The query gate and query rewriter still call the OpenAI SDK directly, so the "every
   LLM call goes through `ChatOpenAI`" rule is true of generation and not yet of them.
   Retrofit is two `with_structured_output` swaps plus an `isinstance` narrow at each
   tool's existing failure branch; it was left out of the generation branch to avoid
@@ -684,12 +698,11 @@ Known scaling limits already identified:
 
 ## Two things to design for now, without building them
 
-- **A relevance threshold below which the app declines to answer.** The assignment
-  pre-announces this as a live modification in the follow-up interview. The drop-in spot
-  exists and is marked: `retrieve_chunks()` in `retrieval/pipeline.py`, between the rerank
-  step and the final cut, where `ranked` would be filtered on `rerank_score` (or on
-  `rrf_score` with the reranker off) and an empty result becomes the decline path. The
-  threshold itself is deliberately not implemented.
+- **Query decomposition for multi-hop questions.** The eval's clearest failure
+  (`synthesis-warfarin-amiodarone`) is one query matching a single document on both
+  entities and swallowing every slot. The fix is decomposition into per-document
+  sub-queries, or a per-document quota in fusion. Neither is built; the failure is
+  characterized above and the shape of the fix is known.
 - **Every significant line must be defensible out loud.** Prefer the version that can be
   explained over the version that is clever.
 
