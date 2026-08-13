@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 18:46 -07:00
+**Last updated:** 2026-08-12 19:02 -07:00
 
 ---
 
@@ -604,8 +604,13 @@ moves Recall@5 by 0.08, which exceeds the gap they existed to show. Gate and rew
 stay on throughout: the advice cases need the gate, and on a single-turn suite the
 rewrite delta would measure only normalization (recorded limitation).
 
-**Report shape (`eval/report.py`, pure — traces and verdicts in, markdown out):** one
-section per configuration — rank metrics, behavior checks, judge counts, a per-query
+**Report shape (`eval/report.py`, pure — traces and verdicts in, markdown out):** the
+report **states its own criteria before any result** — what the suite is made of (counted
+from the cases, so the prose cannot go stale), what each metric means and how it can
+mislead, the pass condition for every behavioral check, what is recorded as a failure,
+and what the sample size does not establish. A saved run is read on its own by a grader,
+so it must not require `DESIGN.md` to be interpretable. Then one section per
+configuration — rank metrics, behavior checks, judge counts, a per-query
 chunk hit-rate bar chart, then that configuration's failures — followed by a single
 **Comparison** section that puts the configurations side by side: rank metrics with the
 best marked, behavior and judge counts, and a histogram binning the queries by chunk hit

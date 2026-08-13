@@ -51,13 +51,38 @@ def test_report_renders_metrics_and_failures(make_chunk_trace: MakeChunk) -> Non
     }
     report = render_report(CASES, run, verdicts)
 
-    assert "## dense" in report
+    assert "## Retrieval configuration: dense" in report
     assert "| strict/section | 1.00 | 1.00 |" in report  # the planted hit, top-ranked
     assert "advice question was not gate-refused" in report
     assert "hallucinated citation tags: S9" in report
     assert "unjudged: the judge call failed" in report
     # The only served chunk hits, so this query's chunk hit rate is a full bar.
     assert "hit  1.00  " + "#" * 24 in report
+
+
+def test_preamble_states_the_criteria_and_counts_the_suite(make_chunk_trace: MakeChunk) -> None:
+    """The report has to stand alone: the rules come before any number, and the suite
+    composition is counted from the cases rather than described by hand."""
+    run = EvalRun(
+        started_at="2026-08-12T13:00:00-07:00",
+        traces=[
+            trace("hit", [make_chunk_trace()], tags=[]),
+            trace("advice", [], tags=[]),
+        ],
+    )
+    report = render_report(CASES, run, {})
+
+    assert "### What was tested" in report
+    assert "2 authored single-turn cases" in report
+    # One case carries expected sources, the advice case does not.
+    assert "| 1 | `lookup` |" in report
+    assert "| 1 | `advice` |" in report
+    # Every criteria block the reader needs to judge a number.
+    assert "### What is measured, and what each number means" in report
+    assert "### What is recorded as a failure" in report
+    assert "### What these numbers do not establish" in report
+    # The criteria precede the results.
+    assert report.index("### What is measured") < report.index("## Comparison")
 
 
 def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> None:

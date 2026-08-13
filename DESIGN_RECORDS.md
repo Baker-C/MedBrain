@@ -2666,3 +2666,39 @@ judge calls instead of 72 and 72, taking a full run from ~35 minutes to ~18.
 **Consequence:** per-leg attribution is no longer available from the harness. If the
 sparse leg's individual contribution is ever contested, the answer is to grow the suite
 until a single case cannot move the metric, not to re-add the columns to the current one.
+
+## The eval report states its own criteria before its results
+
+**Timestamp:** 2026-08-12 19:02 -07:00
+
+The report opened directly on a metric table. Every number in it was defensible, but a
+reader could not tell what would have made any of them fail: `Precision@5 | 0.46` does not
+say what was divided by what, `discrimination clean | 3/3` does not say what a trap case
+is, and neither says why the number is evidence about the product. Added a preamble and
+titled every table.
+
+The preamble has four parts: **what was tested** (case count and a kind-by-kind table of
+what each group exists to catch, counted from `SUITE` so the prose cannot drift from the
+suite), **what is measured** (each metric, each lens, each behavioral pass condition, and
+the judge's two verdicts), **what is recorded as a failure** (the rules in
+`case_failures`, stated before the failures appear), and **what the numbers do not
+establish** (the sample size caveat).
+
+Two of those paragraphs are there to prevent a specific misreading rather than to
+describe machinery:
+
+- Precision divides by chunks *served*, not by K, so a configuration that trims its
+  served set raises Precision without retrieving anything better. The 18:43 run does
+  exactly this — dense serves 5 chunks on every case, dense+sparse+rerank serves a mean
+  of 2.69 — and its Precision jump of 0.26 → 0.46 is therefore partly an artifact. The
+  report now says to read Precision beside Recall.
+- A refusal is grounded by definition while still being incorrect, which is why `correct`
+  and `grounded` are separate verdicts and why a high grounding score alone means little.
+
+Counted rather than written: the case counts and kind breakdown come from the cases
+themselves. Hand-written composition prose is the first thing to go stale when a case is
+added, and a stale description of ground truth is worse than none.
+
+Rejected: putting this only in `DESIGN.md`. A saved run is read on its own — it is the
+artifact attached to a review — and a report that needs a second file to interpret is not
+a deliverable. The duplication is deliberate and the report is the copy that travels.
