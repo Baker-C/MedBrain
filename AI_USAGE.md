@@ -76,19 +76,7 @@ function the query endpoint composes its response from.
 instead of parsing JSON back into restated shapes, and there is now exactly one answer
 path rather than a graded one and a measured one free to drift apart.
 
-### 5. Retrieval package layout
-
-**AI Proposal:** nine flat modules under `retrieval/tools/`, applying my own earlier
-"self-contained tool" convention literally.
-
-**Personal Decision:** folders named for the pipeline stages — `query/` → `search/` →
-`ranking/` — with a shared contract module.
-
-**Why:** the convention was being applied to things that were not tools. One file had
-accumulated a SQL fragment, a row reader, and a domain type; the pipeline's public return
-type was defined inside a leaf tool. Shipped as a rename-only diff, tests green either side.
-
-### 6. Ingestion location
+### 5. Ingestion location
 
 **AI Proposal:** keep it at `backend/ingestion/`, with the heavy CV dependencies isolated in a
 non-default dependency group.
@@ -98,17 +86,3 @@ non-default dependency group.
 **Why:** ingestion is never reached through the API, so it does not belong inside the API
 project. A separate lockfile also makes the lean-backend property structural rather than
 procedural — the serving image *cannot* resolve the extraction dependencies at all.
-
-### 7. Relevance threshold
-
-**AI Proposal:** resolve my ambiguous "middle of the outputs" into a plausible number —
-normalize against the 0–10 rerank scale, get 7, implement it.
-
-**Personal Decision:** sweep it against the saved traces first. The answer was **3**.
-
-**Why:** the data was already on disk — 128 scored chunks from a real run, free to replay.
-The sweep showed 7 costs 8 points of strict Recall@5 and darkens a working synthesis case,
-while 3 is the tightest cut that costs nothing. I also rejected two implementations that
-treated an *unscored* chunk as failing: `rerank_score` is None both when the reranker is off
-and when its call fails open, so either version would have let one unreachable OpenAI call
-turn every query into a false claim that the corpus lacks an answer.
