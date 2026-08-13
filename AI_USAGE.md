@@ -18,78 +18,14 @@ is why this record exists.
 
 **AI Proposal:** run `RecursiveCharacterTextSplitter` over the whole document at a fixed size.
 
-**Personal Decision:** three passes — layout-aware extraction, then carve into real sections along
-titles and table boundaries, then recursive split only what is still too large.
+**Personal Decision:** three passes — layout-aware extraction, then carve into real sections
+along titles and table boundaries, then recursive split only what is still too large.
 
 **Why:** the deliverable is a *citation*, not a chunk. Splitting on character count puts
 section boundaries mid-chunk, so the section a citation names is wrong, and it shreds the
 dosage and interaction tables that hold most of these answers.
 
-### 2. Gate and rewriter
-
-**AI Proposal:** one combined LLM call behind a single on/off request parameter.
-
-**Personal Decision:** two independently toggled tools, each with its own prompt and its own failure
-direction, composed by the pipeline.
-
-**Why:** one call cannot express two failure directions, and these need opposite ones — the
-gate fails **closed** (a broken safety check refuses rather than answers ungated), the
-rewriter fails **open** (a broken rewriter never blocks a question). Making the rewriter a
-separately toggled stage is also what exposed the harness bug in §7: it was re-running
-inside every eval configuration, so 15 of 18 cases were searching different text.
-
-### 3. Eval harness
-
-**AI Proposal:** a script under `scripts/` driving the deployed query endpoint's trace mode
-over HTTP.
-
-**Personal Decision:** `backend/eval/`, running in-process against `prepare_turn()` — the same
-function the query endpoint composes its response from.
-
-**Why:** the harness must not require a running backend. It also stays typed end to end
-instead of parsing JSON back into restated shapes, and there is now exactly one answer
-path rather than a graded one and a measured one free to drift apart.
-
-### 4. Retrieval package layout
-
-**AI Proposal:** nine flat modules under `retrieval/tools/`, applying my own earlier
-"self-contained tool" convention literally.
-
-**Personal Decision:** folders named for the pipeline stages — `query/` → `search/` → `ranking/` —
-with a shared contract module.
-
-**Why:** the convention was being applied to things that were not tools. One file had
-accumulated a SQL fragment, a row reader, and a domain type; the pipeline's public return
-type was defined inside a leaf tool. Shipped as a rename-only diff, tests green either side.
-
-### 5. Ingestion location
-
-**AI Proposal:** keep it at `backend/ingestion/`, with the heavy CV dependencies isolated in a
-non-default dependency group.
-
-**Personal Decision:** its own top-level project with its own lockfile, Dockerfile, and tests.
-
-**Why:** ingestion is never reached through the API, so it does not belong inside the API
-project. A separate lockfile also makes the lean-backend property structural rather than
-procedural — the serving image *cannot* resolve the extraction dependencies at all.
-
-### 6. Relevance threshold
-
-**AI Proposal:** resolve my ambiguous "middle of the outputs" into a plausible number —
-normalize against the 0–10 rerank scale, get 7, implement it.
-
-**Personal Decision:** sweep it against the saved traces first. The answer was **3**.
-
-**Why:** the data was already on disk — 128 scored chunks from a real run, free to replay.
-The sweep showed 7 costs 8 points of strict Recall@5 and darkens a working synthesis case,
-while 3 is the tightest cut that costs nothing. I also rejected two implementations that
-treated an *unscored* chunk as failing: `rerank_score` is None both when the reranker is off
-and when its call fails open, so either version would have let one unreachable OpenAI call
-turn every query into a false claim that the corpus lacks an answer.
-
----
-
-### 7. The one that cost the most, and that review did not catch
+### 2. The one that cost the most, and that review did not catch
 
 **AI Produced:** the sparse retrieval leg, as
 `where tsv @@ websearch_to_tsquery('english', %s)`.
@@ -114,3 +50,65 @@ the leg returned nothing. It survived because it sounded exactly like a tradeoff
 retriever really does make. Both the SQL and the false reading are corrected, and the
 standing lesson is in `DESIGN.md`: check a causal story about a subsystem against whether
 that subsystem ran at all.
+
+### 3. Gate and rewriter
+
+**AI Proposal:** one combined LLM call behind a single on/off request parameter.
+
+**Personal Decision:** two independently toggled tools, each with its own prompt and its own
+failure direction, composed by the pipeline.
+
+**Why:** one call cannot express two failure directions, and these need opposite ones — the
+gate fails **closed** (a broken safety check refuses rather than answers ungated), the
+rewriter fails **open** (a broken rewriter never blocks a question). Making the rewriter a
+separately toggled stage is also what exposed a second harness bug alongside §2: it was
+re-running inside every eval configuration, so 15 of 18 cases were searching different text.
+
+### 4. Eval harness
+
+**AI Proposal:** a script under `scripts/` driving the deployed query endpoint's trace mode
+over HTTP.
+
+**Personal Decision:** `backend/eval/`, running in-process against `prepare_turn()` — the same
+function the query endpoint composes its response from.
+
+**Why:** the harness must not require a running backend. It also stays typed end to end
+instead of parsing JSON back into restated shapes, and there is now exactly one answer
+path rather than a graded one and a measured one free to drift apart.
+
+### 5. Retrieval package layout
+
+**AI Proposal:** nine flat modules under `retrieval/tools/`, applying my own earlier
+"self-contained tool" convention literally.
+
+**Personal Decision:** folders named for the pipeline stages — `query/` → `search/` →
+`ranking/` — with a shared contract module.
+
+**Why:** the convention was being applied to things that were not tools. One file had
+accumulated a SQL fragment, a row reader, and a domain type; the pipeline's public return
+type was defined inside a leaf tool. Shipped as a rename-only diff, tests green either side.
+
+### 6. Ingestion location
+
+**AI Proposal:** keep it at `backend/ingestion/`, with the heavy CV dependencies isolated in a
+non-default dependency group.
+
+**Personal Decision:** its own top-level project with its own lockfile, Dockerfile, and tests.
+
+**Why:** ingestion is never reached through the API, so it does not belong inside the API
+project. A separate lockfile also makes the lean-backend property structural rather than
+procedural — the serving image *cannot* resolve the extraction dependencies at all.
+
+### 7. Relevance threshold
+
+**AI Proposal:** resolve my ambiguous "middle of the outputs" into a plausible number —
+normalize against the 0–10 rerank scale, get 7, implement it.
+
+**Personal Decision:** sweep it against the saved traces first. The answer was **3**.
+
+**Why:** the data was already on disk — 128 scored chunks from a real run, free to replay.
+The sweep showed 7 costs 8 points of strict Recall@5 and darkens a working synthesis case,
+while 3 is the tightest cut that costs nothing. I also rejected two implementations that
+treated an *unscored* chunk as failing: `rerank_score` is None both when the reranker is off
+and when its call fails open, so either version would have let one unreachable OpenAI call
+turn every query into a false claim that the corpus lacks an answer.
