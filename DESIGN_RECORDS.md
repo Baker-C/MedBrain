@@ -2666,3 +2666,92 @@ judge calls instead of 72 and 72, taking a full run from ~35 minutes to ~18.
 **Consequence:** per-leg attribution is no longer available from the harness. If the
 sparse leg's individual contribution is ever contested, the answer is to grow the suite
 until a single case cannot move the metric, not to re-add the columns to the current one.
+
+## The eval report states its own criteria before its results
+
+**Timestamp:** 2026-08-12 19:02 -07:00
+
+The report opened directly on a metric table. Every number in it was defensible, but a
+reader could not tell what would have made any of them fail: `Precision@5 | 0.46` does not
+say what was divided by what, `discrimination clean | 3/3` does not say what a trap case
+is, and neither says why the number is evidence about the product. Added a preamble and
+titled every table.
+
+The preamble has four parts: **what was tested** (case count and a kind-by-kind table of
+what each group exists to catch, counted from `SUITE` so the prose cannot drift from the
+suite), **what is measured** (each metric, each lens, each behavioral pass condition, and
+the judge's two verdicts), **what is recorded as a failure** (the rules in
+`case_failures`, stated before the failures appear), and **what the numbers do not
+establish** (the sample size caveat).
+
+Two of those paragraphs are there to prevent a specific misreading rather than to
+describe machinery:
+
+- Precision divides by chunks *served*, not by K, so a configuration that trims its
+  served set raises Precision without retrieving anything better. The 18:43 run does
+  exactly this — dense serves 5 chunks on every case, dense+sparse+rerank serves a mean
+  of 2.69 — and its Precision jump of 0.26 → 0.46 is therefore partly an artifact. The
+  report now says to read Precision beside Recall.
+- A refusal is grounded by definition while still being incorrect, which is why `correct`
+  and `grounded` are separate verdicts and why a high grounding score alone means little.
+
+Counted rather than written: the case counts and kind breakdown come from the cases
+themselves. Hand-written composition prose is the first thing to go stale when a case is
+added, and a stale description of ground truth is worse than none.
+
+Rejected: putting this only in `DESIGN.md`. A saved run is read on its own — it is the
+artifact attached to a review — and a report that needs a second file to interpret is not
+a deliverable. The duplication is deliberate and the report is the copy that travels.
+
+## Deltas are computed in the report, not left to the reader
+
+**Timestamp:** 2026-08-12 20:24 -07:00
+
+Every comparison table printed two columns of numbers and left the reader to subtract.
+Added a signed delta column against the baseline configuration to the suite-composition
+table, the rank-metric table, and the behavior/judge table, plus a per-case movement chart
+sorted by gain.
+
+Deltas are a fraction for rank metrics and a whole number of cases for behavioral counts,
+because that is what those rows are: `discrimination clean` going 2/3 to 3/3 is one case
+changing behavior, and printing `+0.33` there would invite averaging something that is not
+an average.
+
+The per-case movement chart is the part that earns its place. The 18:43 run improves on
+every aggregate the report shows, and the chart is the only view that surfaces
+`lookup-bupropion-seizure` regressing 0.60 to 0.40 — a case the baseline handled better.
+A configuration that lifts the mean while dropping a case it used to answer has made a
+trade, and the trade is invisible in every other table.
+
+Kinds with no expected sources render `n/a` rather than `0.00` in both the value and the
+delta columns. Advice and unanswerable cases have nothing correct to retrieve, so a
+retrieval score of zero would read as a failure where in fact nothing was measured.
+
+## Report register: technical, with each term defined once
+
+**Timestamp:** 2026-08-12 20:24 -07:00
+
+An intermediate pass rewrote the report for a reader assumed to know nothing — no metric
+vocabulary, no notion of retrieval, no sense of which direction is good. The owner rejected
+that framing: the register stays technical, and clarity comes from defining terms rather
+than from avoiding them.
+
+The reverted version was not wasted. What survived from it is the discipline it forced:
+`Recall@5`, `MRR`, `Precision@5`, the four lenses, and the `Δ` notation are all used as
+such, but each is now defined at the point the reader meets it, with the question it
+answers and the way it can mislead. Two of those explanations exist to prevent a specific
+misreading and would have been dropped by either extreme — that Precision's denominator is
+chunks *served* rather than K, so a shorter served list inflates it without better ranking;
+and that `correct` and `grounded` dissociate, since a refusal is grounded by definition
+while still being incorrect.
+
+Configuration names are decoded in place: `dense+sparse+rerank` renders as dense retrieval,
+sparse retrieval fused by RRF, and a `gpt-5-nano` reranking pass. The names are jargon the
+report is entitled to use; they are not names the reader can be assumed to have met.
+
+**Encoding, fixed at the source rather than avoided.** The delta symbol is outside cp1252,
+so a redirected `make eval > report.md` would have raised `UnicodeEncodeError` — the same
+class of bug that kept the charts ASCII. Rather than drop the symbol, `main()` now
+reconfigures stdout to UTF-8. Verified in both directions: printing the symbol to a
+redirected stdout fails without the reconfigure and succeeds with it. The charts stay ASCII
+regardless, because alignment in a fixed-width block is a separate concern from encoding.

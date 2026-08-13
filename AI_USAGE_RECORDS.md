@@ -1516,3 +1516,38 @@ is named as a follow-up and not built.
 **The code diff and its commit:** `backend/chat/context.py` (`TAG_PATTERN`),
 `frontend/src/lib/sentinels.ts` (`COMPLETE_TAG`, `TRAILING_PARTIAL_TAG`), plus tests both
 sides. Commit `cd03e07` (PR #21).
+
+## Report register: layman rewrite proposed and rejected
+
+**Timestamp:** 2026-08-12 20:24 -07:00
+
+**1. What it ended up as** — the eval report's explanatory prose: technical vocabulary,
+each term defined once where the reader meets it.
+
+**2. The change and the reasoning** — asked to write the report for someone who "knows
+absolutely nothing about the metrics, the prompts, the documents, or about anything LLM",
+Claude Code (Opus 5) took the instruction literally and rewrote it in consumer language:
+metric names replaced by questions ("Did the necessary information get found at all?"),
+`dense+sparse+rerank` rendered as "meaning-based search, plus keyword search, plus AI
+re-sorting", and the `Δ` column relabelled "change vs dense". The owner corrected the
+overshoot on the next pass: keep the technical language and the delta notation, and make
+sure it is *explained* clearly instead.
+
+The correction is the right one and worth recording as a general lesson: "explain it
+clearly" and "use simpler words" are different instructions, and the second is a lossy
+substitute for the first. A report for a technical reviewer that avoids the word Recall has
+not become clearer, it has become vaguer — the reviewer now has to guess which standard
+metric is meant. What the rejected pass did contribute was the discipline of defining every
+term at first use, which survived into the final version.
+
+One decision from the rejected pass was kept on its own merits: the report explains that
+Precision's denominator is chunks served rather than K, and therefore that a configuration
+serving fewer chunks scores higher without ranking better. That is not simplification, it
+is a caveat a technical reader needs and the 18:43 run demonstrates.
+
+**3. The code diff and its commit** — `eval/report.py` (the explanatory constants
+`WHAT_THIS_IS`, `VOCABULARY`, `SCALES`, `HOW_TO_READ`, `LENS_LEGEND`, `FAILURE_RULES`,
+`VALIDITY_NOTE`, `SEARCH_METHODS`, and the section titles) and `eval/__main__.py`
+(`sys.stdout` reconfigured to UTF-8, which is what allows the delta symbol to survive a
+redirect). Carried by `6a88fc2` (the rejected layman pass, kept in history rather than
+squashed) and `626dd17` (the restoration), on the `eval-report-comparison` branch.
