@@ -23,14 +23,37 @@ from eval.driver import run_case, shared_rewrite
 from eval.judge import build_judge, judge_answer
 from eval.report import Verdicts, render_report
 from eval.suite import SUITE
-from eval.trace import EvalRun
+from eval.trace import CaseTrace, EvalRun
 
 RUNS_DIR = Path(__file__).parent / "runs"
+
+BAR_WIDTH = 32
+LABEL_WIDTH = 42
 
 
 def unfinished(case: EvalCase) -> bool:
     """A case still carrying authoring placeholders must not spend API calls."""
     return "TODO" in case.question or "TODO" in case.expected_answer
+
+
+def progress_line(phase: str, done: int, total: int, label: str) -> str:
+    """One rewritable line: how far along, and what was just finished.
+
+    ASCII only and fixed width, so it overwrites cleanly on every console and does
+    not depend on the terminal's encoding.
+    """
+    filled = round(BAR_WIDTH * done / total) if total else BAR_WIDTH
+    bar = "#" * filled + "." * (BAR_WIDTH - filled)
+    percent = round(100 * done / total) if total else 100
+    padded = f"{label:<{LABEL_WIDTH}.{LABEL_WIDTH}}"
+    return f"\r{phase:<8} [{bar}] {percent:>3}% {done:>3}/{total}  {padded}"
+
+
+def show_progress(phase: str, done: int, total: int, label: str) -> None:
+    """Draw the bar on stderr, so stdout stays a clean pipeable report."""
+    print(progress_line(phase, done, total, label), end="", file=sys.stderr, flush=True)
+    if done == total:
+        print(file=sys.stderr)
 
 
 def collect_traces(settings: Settings) -> EvalRun:
@@ -41,13 +64,15 @@ def collect_traces(settings: Settings) -> EvalRun:
     """
     clients = build_clients(settings)
     started_at = datetime.now().astimezone().isoformat(timespec="seconds")
-    traces = []
+    traces: list[CaseTrace] = []
+    total = len(SUITE) * len(EVAL_CONFIGS)
     with psycopg.connect(settings.database_url) as conn:
         for case in SUITE:
             rewritten_query = shared_rewrite(clients, case)
             for name, config in EVAL_CONFIGS.items():
-                print(f"running {case.id} × {name}", file=sys.stderr)
+                show_progress("running", len(traces), total, f"{case.id} x {name}")
                 traces.append(run_case(clients, conn, case, name, config, rewritten_query))
+    show_progress("running", total, total, "done")
     return EvalRun(started_at=started_at, traces=traces)
 
 
@@ -65,10 +90,12 @@ def judge_run(run: EvalRun, settings: Settings) -> Verdicts:
     judge = build_judge(settings.openai_api_key)
     verdicts: Verdicts = {}
     for trace in run.traces:
-        print(f"judging {trace.case_id} × {trace.config_name}", file=sys.stderr)
+        label = f"{trace.case_id} x {trace.config_name}"
+        show_progress("judging", len(verdicts), len(run.traces), label)
         verdicts[(trace.case_id, trace.config_name)] = judge_answer(
             judge, by_id[trace.case_id], trace
         )
+    show_progress("judging", len(run.traces), len(run.traces), "done")
     return verdicts
 
 
