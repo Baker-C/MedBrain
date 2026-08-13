@@ -33,23 +33,21 @@ dosage and interaction tables that hold most of these answers.
 **Personal Correction:** the same query with the compiled tsquery's `&` operators rewritten
 to `|`.
 
-**Why:** valid SQL, reads correctly, passed my review — and it returned **zero rows for all
-18 eval questions**, because `websearch_to_tsquery` joins bare terms with `&`, making a
-whole question a conjunction no chunk satisfies. It was invisible from the application side:
-an empty leg is a documented, handled case in fusion, so hybrid retrieval degraded silently
-to dense-only and reported a clean full run. Nothing in lint, mypy, or the hermetic tests
-could see it — the bug was not in code that errors, and its failure mode is
-indistinguishable from a legitimate empty result. I found it by asking why the fused scores
-clustered so tightly, then checking which leg the served chunks came from: 126 of 128 were
-dense-only. The stretch goal had been graded on a leg that never ran.
+**Why:** valid SQL that reads correctly and passed my review, but `websearch_to_tsquery`
+joins bare terms with `&`, so a whole question became a conjunction no chunk satisfies —
+**zero rows on all 18 eval questions**, and the stretch goal was being graded on a leg that
+never ran.
 
-Worse, the AI had already written a failure analysis explaining that hybrid retrieval *cost*
-discrimination accuracy — the sparse leg pulling sibling-drug chunks, the reranker keeping
-them, presented as the honest cost of the stretch goal. Fluent, plausible, and impossible:
-the leg returned nothing. It survived because it sounded exactly like a tradeoff a hybrid
-retriever really does make. Both the SQL and the false reading are corrected, and the
-standing lesson is in `DESIGN.md`: check a causal story about a subsystem against whether
-that subsystem ran at all.
+**The AI missed it because nothing in its field of view could show it.** The bug is not in
+code that errors, and an empty leg is a handled case downstream, so fusion quietly fell back
+to dense-only and reported a clean run. Lint, types, and a hermetic suite all check code
+against itself; this failure only exists against a live index.
+
+**I caught it by reading the output instead of the code** — the fused scores clustered far
+too tightly for two independent rankings, and the served chunks turned out to be 126 of 128
+dense-only. The same blind spot had already produced a fluent failure analysis crediting the
+sparse leg with results it never returned. A plausible causal story is worth nothing until
+you check that the subsystem ran at all.
 
 ### 3. Gate and rewriter
 
