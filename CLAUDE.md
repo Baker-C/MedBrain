@@ -2,13 +2,12 @@
 
 ## Living Documents — Keep These Updated
 
-Three markdown files at the repo root are yours to maintain. They split by purpose:
+Two markdown files at the repo root are yours to maintain. They split by purpose:
 
 | File | Holds | Style |
 |---|---|---|
 | `DESIGN.md` | The design **as it is now** — source of truth | Edit in place |
 | `DESIGN_RECORDS.md` | **Why** each choice was made, and what was rejected | Append-only |
-| `AI_USAGE_RECORDS.md` | Where AI output was overridden, corrected, or rejected | Append-only |
 
 ### DESIGN.md — the source of truth for project design
 
@@ -34,20 +33,19 @@ Note `DESIGN.md` doubles as a graded deliverable capped at 1–2 pages. It will 
 than that while it serves as the working source of truth; it gets trimmed to the graded
 shape near the end. Do not trim it early to hit the page count.
 
-### The records files
+### The records file
 
-`DESIGN_RECORDS.md` and `AI_USAGE_RECORDS.md` are append-only running records of what
-happened while this codebase was built. Append to the relevant file in the same working
-session as the change — do not defer it. Do not rewrite or delete past entries; add a new
-entry that supersedes an old one.
+`DESIGN_RECORDS.md` is an append-only running record of what happened while this codebase
+was built. Append to it in the same working session as the change — do not defer it. Do
+not rewrite or delete past entries; add a new entry that supersedes an old one.
 
 The division of labor with `DESIGN.md`: a decision changes `DESIGN.md` to the new state
 *and* adds a `DESIGN_RECORDS.md` entry explaining the choice and what lost. `DESIGN.md`
 answers "what is it"; the records answer "why, and what else was on the table".
 
-### Timestamps — required on every entry for *_RECORDS.md files
+### Timestamps — required on every entry in DESIGN_RECORDS.md
 
-Every entry in both files carries one timestamp, directly under its heading:
+Every entry carries one timestamp, directly under its heading:
 
 ```
 **Timestamp:** 2026-08-11 21:31 -07:00
@@ -96,34 +94,6 @@ Append to DESIGN_RECORDS.md when you:
 - take a shortcut that would not ship — add it to the debt list immediately, while the
   reason is still fresh
 
-### AI_USAGE_RECORDS.md
-
-> **Note:** Before a new push to remote, check the changes recorded here. If any of those
-> changes happened during that commit, record that commit next to the code diff.
-
-Record, as they happen:
-
-1. **Which AI tools were used, and for what.**
-2. **Concrete examples where AI-generated output was overridden, corrected, or rejected.**
-
-Append to AI_USAGE_RECORDS.md when you:
-- start using a new AI tool on this project
-- override, rewrite, correct, or reject AI-generated output for a real reason — log it at
-  that moment
-
-Every logged override / rewrite / rejection has exactly three parts:
-
-1. **What it ended up as** — one short sentence naming the thing. Examples:
-   "k-nearest-neighbors function", "Chroma upsert function", "chunk size logic",
-   "feature file structure".
-2. **The change and the reasoning** — state it as *this → that*: what the AI produced,
-   what it became, and why the user chose to change it (if they said, or if it is
-   knowable). Write enough detail that the decision can be defended later even if the
-   change was fully overridden and none of the original code survives anywhere.
-3. **The code diff and its commit** — the actual diff of the change, and next to it the
-   commit in the history that carries it. If the change is not yet committed, leave the
-   commit field pending and fill it in at the pre-push check above.
-
 ## Project Context
 
 **MedBrain** — a web app that answers a clinical operations professional's
@@ -151,7 +121,7 @@ These rules have no priority order. Apply all of them.
 Author and commit everything as the repository owner (the configured git user). Do not
 mention the agent anywhere in git history: no `Co-Authored-By` trailers, no "Generated
 with Claude Code" lines, and no AI attribution in commit messages, branch names, tags,
-or PR descriptions. AI usage is recorded in `AI_USAGE_RECORDS.md`, not in git history.
+or PR descriptions. AI usage is disclosed in `AI_USAGE.md`, not in git history.
 
 ### Error handling
 Add error handling only where a failure is realistic and unhandled failure would be

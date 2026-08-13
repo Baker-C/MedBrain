@@ -622,7 +622,7 @@ cost zero pipeline calls. The saved run backs the failure analysis.
 `report.py`, `driver.py` (reuses the API's composition root, `build_clients`), and
 `python -m eval` with a guard that refuses to run while `suite.py` still contains
 authoring placeholders. The 18 cases are drafted with every expected source verified
-against extracted label text (pending owner review — see `AI_USAGE_RECORDS.md`); what
+against extracted label text (pending owner review — see `AI_USAGE.md`); what
 remains before a real run is an ingested corpus, and the driver is unexercised against
 live data until ingestion has run.
 
