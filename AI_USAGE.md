@@ -33,21 +33,16 @@ dosage and interaction tables that hold most of these answers.
 **Personal Correction:** the same query with the compiled tsquery's `&` operators rewritten
 to `|`.
 
-**Why:** valid SQL that reads correctly and passed my review, but `websearch_to_tsquery`
-joins bare terms with `&`, so a whole question became a conjunction no chunk satisfies —
-**zero rows on all 18 eval questions**, and the stretch goal was being graded on a leg that
-never ran.
+**Why:** `websearch_to_tsquery` joins bare terms with `&`, so a question became a conjunction
+no chunk satisfies — zero rows on all 18 eval questions.
 
-**The AI missed it because nothing in its field of view could show it.** The bug is not in
-code that errors, and an empty leg is a handled case downstream, so fusion quietly fell back
-to dense-only and reported a clean run. Lint, types, and a hermetic suite all check code
-against itself; this failure only exists against a live index.
+**The AI missed it** because the bug never errors. An empty leg is a handled case, so fusion
+fell back to dense-only and reported a clean run; lint, types, and hermetic tests only check
+code against itself.
 
-**I caught it by reading the output instead of the code** — the fused scores clustered far
-too tightly for two independent rankings, and the served chunks turned out to be 126 of 128
-dense-only. The same blind spot had already produced a fluent failure analysis crediting the
-sparse leg with results it never returned. A plausible causal story is worth nothing until
-you check that the subsystem ran at all.
+**I caught it** by reading output rather than code: the fused scores clustered too tightly,
+and 126 of 128 served chunks were dense-only. It had already written a failure analysis
+crediting a leg that never ran.
 
 ### 3. Gate and rewriter
 
