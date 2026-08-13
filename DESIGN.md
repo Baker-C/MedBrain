@@ -110,6 +110,14 @@ candidates leaves rank nearly meaningless. *Rejected:* weighted score blending �
 
 ## Failure analysis
 
+`make eval` runs 24 authored cases through `prepare_turn()` — the same function the endpoint
+uses, so there is no second path to drift. **The report states its own criteria before any
+result**: what the suite is made of, counted from the cases so the prose cannot go stale,
+what each metric means and how it can mislead, and what the sample size does not establish.
+Every side-by-side table carries a signed `Δ` against the baseline configuration, and a
+per-case movement chart names the cases that regressed, which an aggregate cannot show. A
+saved run has to be readable by a grader on its own, without this document.
+
 **Chunk count trades precision against accuracy.** Too large a count lowered precision
 greatly while giving very accurate answers, took ~3× as long per query, and — at this corpus
 size — stopped dense and sparse returning different documents at all. Lowering the returned
