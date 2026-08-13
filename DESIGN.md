@@ -17,15 +17,15 @@
 | Corpus files | Private **Supabase Storage bucket** is the source of truth; `DocumentCorpus/` in the repo is the seed copy. Backend mints ~5 min signed URLs; file bytes never pass through the backend |
 | PDF extraction | Unstructured `hi_res` (local CV layout models) — tables come out as structured HTML |
 | Deploy | Render — backend and frontend. The ingestion container runs **locally**, reading PDFs from the bucket and writing into hosted Supabase |
-| Auth | None. The app is open and all conversation history is visible to everyone |
+| Auth | None. Explicit choice for time scoping. The app is open and all conversation history is visible to everyone |
 | Repo | One repo, three projects plus scripts: `frontend/`, `backend/`, `ingestion/` (run-locally batch job, not deployed), `scripts/` |
 
 ## Chunking and ingestion — three passes, structure-aware
 
 ```
 PDF ─► 1. extract ─► 2. carve ─► 3. split ─► embed ─► reconcile
-       hi_res         section      only what          new│changed│unchanged│removed
-       elements,      titles +     is still too    insert│ diff  │  skip   │ delete
+       hi_res model   section      only what           new│changed│unchanged│removed
+       elements,      titles +     is still too     insert│ diff  │  skip   │ delete
        tables kept    tables       large
        grouped
 ```
@@ -69,9 +69,9 @@ can move into the database.
 
 ## Corpus
 
-**PLR medication labels**, chosen for unambiguous wording: PLR relies on explicit statements
-rather than demonstratives, which matters when a passage has to still mean the same thing
-outside its document. Large enough to stage every query shape the assignment requires —
+**PLR medication labels**, chosen for unambiguous wording and semi-standard document
+structure: PLR relies on explicit statements rather than demonstratives, which matters when
+a passage has to still mean the same thing outside its document. Large enough to stage every query shape the assignment requires —
 overlap, non-overlap, and multi-document. Old-format non-PLR labels were removed as
 unneeded complexity for this task.
 
@@ -166,5 +166,8 @@ cannot be flagged).
 - **Nothing counts sentinel drift** — the lenient reader makes it harmless and unobservable.
 - The gate and rewriter still call the OpenAI SDK directly, off the one-client rule.
 - The frontend casts API responses instead of validating them.
+- Uses LangChain where unneeded (tech debt).
+- Flat file structure and functions (tech debt).
 - The sparse leg is `ts_rank`, not BM25.
 - No auth, no caching, no live LLM-judge.
+- Links repeat in responses, and some responses describe chunks when not needed.
