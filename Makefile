@@ -1,7 +1,7 @@
 # Root entrypoint for the eval harness. The harness is a backend package and owns
 # all of the work; this target only spares the reader from knowing that.
 #
-# A full run drives 18 cases x 4 retrieval configurations through the real pipeline
+# A full run drives 18 cases x 2 retrieval configurations through the real pipeline
 # and judges every answer, so it needs backend/.env and an ingested corpus. Traces
 # and the report land in backend/eval/runs/; the report also prints here.
 #
