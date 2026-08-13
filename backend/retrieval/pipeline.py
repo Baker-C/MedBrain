@@ -54,6 +54,17 @@ def sparse_candidates(
     return run_sparse_search(conn, query, config.candidate_limit)
 
 
+def relevant_enough(scored: ScoredChunk, minimum: int) -> bool:
+    """Whether this chunk cleared the relevance bar.
+
+    An unscored chunk passes. `rerank_score` is None when the reranker was off and
+    also when its call failed, and both mean the same thing here: no judgement was
+    made, so there is nothing to fail. Treating an absent score as a failure would
+    turn one bad OpenAI call into a corpus-wide decline.
+    """
+    return scored.rerank_score is None or scored.rerank_score >= minimum
+
+
 def retrieve_chunks(
     embeddings: OpenAIEmbeddings,
     reranker: RerankerModel,
@@ -62,11 +73,14 @@ def retrieve_chunks(
     config: RetrievalConfig,
 ) -> list[ScoredChunk]:
     """Dense candidates always, plus the keyword leg's when it is on, fused on rank,
-    optionally reranked, cut to the generation budget.
+    optionally reranked, filtered on relevance, cut to the generation budget.
 
     With `sparse` off the fusion is a passthrough — reciprocal rank decreases with rank,
     so one list against an empty one keeps its own order — and the reranker simply sees
     the dense candidates instead of the union of both legs.
+
+    Returning nothing is a real answer, not a failure: the caller streams the app's
+    decline message and never makes the generation call.
     """
     dense = run_dense_search(conn, embeddings.embed_query(query), config.candidate_limit)
     fused = fuse_rankings(
@@ -76,10 +90,8 @@ def retrieve_chunks(
         limit=config.fused_limit,
     )
     ranked = run_reranker(reranker, query, fused) if config.rerank else fused
-    # Relevance threshold drops in here: filter `ranked` on rerank_score (or on
-    # rrf_score when the reranker is off) before the final cut, and an empty result
-    # becomes the app's decline-to-answer path. Deliberately not built — see DESIGN.md.
-    return ranked[: config.final_limit]
+    relevant = [scored for scored in ranked if relevant_enough(scored, config.min_rerank_score)]
+    return relevant[: config.final_limit]
 
 
 def run_retrieval(
