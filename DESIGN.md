@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 19:02 -07:00
+**Last updated:** 2026-08-12 20:24 -07:00
 
 ---
 
@@ -614,11 +614,19 @@ so it must not require `DESIGN.md` to be interpretable. Then one section per
 configuration — rank metrics, behavior checks, judge counts, a per-query
 chunk hit-rate bar chart, then that configuration's failures — followed by a single
 **Comparison** section that puts the configurations side by side: rank metrics with the
-best marked, behavior and judge counts, and a histogram binning the queries by chunk hit
-rate so a configuration's misses show as mass on the left rather than only as a lower
-mean. Charts are ASCII inside fenced blocks, so the report renders identically in a
-terminal and in markdown. Progress during a run is a rewritable bar on **stderr** —
-stdout carries only the report, which keeps `make eval > report.md` honest.
+best marked, behavior and judge counts, a per-case movement chart, and a histogram
+binning the cases by chunk hit rate so a configuration's misses show as mass in the low
+band rather than only as a lower mean. **Every side-by-side table carries a signed `Δ`
+column** against the baseline configuration — a fraction for rank metrics, whole cases
+for behavioral counts — so no reader has to subtract, and the movement chart names the
+individual cases that regressed, which an aggregate cannot show.
+
+The register is technical: metric names, lens names, and delta notation are used as such,
+each defined once at the point the reader meets it. Charts are ASCII inside fenced blocks,
+so the report renders identically in a terminal and in markdown. Progress during a run is
+a rewritable bar on **stderr** — stdout carries only the report, and `main()` reconfigures
+stdout to UTF-8 so `make eval > report.md` cannot fail on a character outside the console
+codepage.
 
 **Record/replay:** a run saves every trace to `eval/runs/<timestamp>.json`;
 `--score-only <run>` re-scores a saved run offline, so scoring and judge iteration

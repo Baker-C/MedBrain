@@ -2702,3 +2702,56 @@ added, and a stale description of ground truth is worse than none.
 Rejected: putting this only in `DESIGN.md`. A saved run is read on its own — it is the
 artifact attached to a review — and a report that needs a second file to interpret is not
 a deliverable. The duplication is deliberate and the report is the copy that travels.
+
+## Deltas are computed in the report, not left to the reader
+
+**Timestamp:** 2026-08-12 20:24 -07:00
+
+Every comparison table printed two columns of numbers and left the reader to subtract.
+Added a signed delta column against the baseline configuration to the suite-composition
+table, the rank-metric table, and the behavior/judge table, plus a per-case movement chart
+sorted by gain.
+
+Deltas are a fraction for rank metrics and a whole number of cases for behavioral counts,
+because that is what those rows are: `discrimination clean` going 2/3 to 3/3 is one case
+changing behavior, and printing `+0.33` there would invite averaging something that is not
+an average.
+
+The per-case movement chart is the part that earns its place. The 18:43 run improves on
+every aggregate the report shows, and the chart is the only view that surfaces
+`lookup-bupropion-seizure` regressing 0.60 to 0.40 — a case the baseline handled better.
+A configuration that lifts the mean while dropping a case it used to answer has made a
+trade, and the trade is invisible in every other table.
+
+Kinds with no expected sources render `n/a` rather than `0.00` in both the value and the
+delta columns. Advice and unanswerable cases have nothing correct to retrieve, so a
+retrieval score of zero would read as a failure where in fact nothing was measured.
+
+## Report register: technical, with each term defined once
+
+**Timestamp:** 2026-08-12 20:24 -07:00
+
+An intermediate pass rewrote the report for a reader assumed to know nothing — no metric
+vocabulary, no notion of retrieval, no sense of which direction is good. The owner rejected
+that framing: the register stays technical, and clarity comes from defining terms rather
+than from avoiding them.
+
+The reverted version was not wasted. What survived from it is the discipline it forced:
+`Recall@5`, `MRR`, `Precision@5`, the four lenses, and the `Δ` notation are all used as
+such, but each is now defined at the point the reader meets it, with the question it
+answers and the way it can mislead. Two of those explanations exist to prevent a specific
+misreading and would have been dropped by either extreme — that Precision's denominator is
+chunks *served* rather than K, so a shorter served list inflates it without better ranking;
+and that `correct` and `grounded` dissociate, since a refusal is grounded by definition
+while still being incorrect.
+
+Configuration names are decoded in place: `dense+sparse+rerank` renders as dense retrieval,
+sparse retrieval fused by RRF, and a `gpt-5-nano` reranking pass. The names are jargon the
+report is entitled to use; they are not names the reader can be assumed to have met.
+
+**Encoding, fixed at the source rather than avoided.** The delta symbol is outside cp1252,
+so a redirected `make eval > report.md` would have raised `UnicodeEncodeError` — the same
+class of bug that kept the charts ASCII. Rather than drop the symbol, `main()` now
+reconfigures stdout to UTF-8. Verified in both directions: printing the symbol to a
+redirected stdout fails without the reconfigure and succeeds with it. The charts stay ASCII
+regardless, because alignment in a fixed-width block is a separate concern from encoding.
