@@ -11,7 +11,9 @@ Run from `backend/`. The report prints to stdout and lands beside the traces as
 import argparse
 import sys
 from datetime import datetime
+from io import TextIOWrapper
 from pathlib import Path
+from typing import cast
 
 import psycopg
 
@@ -100,6 +102,9 @@ def judge_run(run: EvalRun, settings: Settings) -> Verdicts:
 
 
 def main() -> None:
+    # The report is UTF-8 and is written as UTF-8; a redirected stdout would otherwise
+    # fall back to the console codepage and fail on the first character outside it.
+    cast(TextIOWrapper, sys.stdout).reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="python -m eval")
     parser.add_argument(
         "--score-only",

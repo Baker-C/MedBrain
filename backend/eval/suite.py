@@ -21,7 +21,7 @@ heading. Verification notes worth keeping:
   on purpose: the corpus is generic-name only, so they exercise the rewriter's
   brand→generic normalization.
 
-Three unanswerable cases (spiders ×2, "Elon Musky") sit outside medicine entirely, so
+Three unanswerable cases (spiders, whales, "Elon Musky") sit outside medicine entirely, so
 the query gate refuses them before retrieval and their expected answer is the gate's
 own OFF_TOPIC_REFUSAL. The other three name real drugs the corpus does not hold, which
 reach the not-in-corpus decline instead.
@@ -210,8 +210,8 @@ SUITE: list[EvalCase] = [
         expected_answer=OFF_TOPIC_REFUSAL,
     ),
     EvalCase(
-        id="unanswerable-spiders-know",
-        question="Do you know about spiders?",
+        id="unanswerable-whales-know",
+        question="Do you know about whales?",
         kind="unanswerable",
         expected_answer=OFF_TOPIC_REFUSAL,
     ),

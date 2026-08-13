@@ -51,13 +51,41 @@ def test_report_renders_metrics_and_failures(make_chunk_trace: MakeChunk) -> Non
     }
     report = render_report(CASES, run, verdicts)
 
-    assert "## dense" in report
+    assert "## Retrieval configuration: dense" in report
     assert "| strict/section | 1.00 | 1.00 |" in report  # the planted hit, top-ranked
     assert "advice question was not gate-refused" in report
     assert "hallucinated citation tags: S9" in report
     assert "unjudged: the judge call failed" in report
     # The only served chunk hits, so this query's chunk hit rate is a full bar.
     assert "hit  1.00  " + "#" * 24 in report
+
+
+def test_preamble_states_the_criteria_and_counts_the_suite(make_chunk_trace: MakeChunk) -> None:
+    """The report has to stand alone: the rules come before any number, and the suite
+    composition is counted from the cases rather than described by hand."""
+    run = EvalRun(
+        started_at="2026-08-12T13:00:00-07:00",
+        traces=[
+            trace("hit", [make_chunk_trace()], tags=[]),
+            trace("advice", [], tags=[]),
+        ],
+    )
+    report = render_report(CASES, run, {})
+
+    assert "### What was tested" in report
+    assert "2 hand-authored cases" in report
+    # Each kind carries its own hit rate. The lookup case's single served chunk hits;
+    # the advice case has no expected source, so a retrieval score would be meaningless
+    # rather than zero.
+    assert "| 1 | `lookup` |" in report
+    assert report.count("| 1.00 |") >= 1
+    assert "| n/a |" in report
+    # Every criteria block the reader needs to judge a number.
+    assert "### What each measurement actually measures" in report
+    assert "### What is recorded as a failure" in report
+    assert "### What these numbers do not establish" in report
+    # The criteria precede the results.
+    assert report.index("### What each measurement") < report.index("## Comparison")
 
 
 def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> None:
@@ -75,8 +103,13 @@ def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> Non
     report = render_report(CASES, run, {})
 
     assert "## Comparison" in report
-    assert "| metric | dense | sparse |" in report
-    assert "| Recall@5 (strict/section) | **1.00** | 0.00 |" in report
+    assert "| metric | dense | sparse | Δ vs dense |" in report
+    # The delta is signed and measured against the first configuration in the run.
+    assert "| Recall@5 (strict/section) | **1.00** | 0.00 | -1.00 |" in report
+    # A behavioral count delta is a whole number of cases, not a rate.
+    assert "| grounding clean | 2/2 | 2/2 | +0 |" in report
+    # The per-query movement chart names the regression and signs it.
+    assert "hit  -1.00  " + "-" * 24 in report
     # dense's one query sits in the top band, sparse's in the bottom.
     assert "  0.8-1.0  #                     1" in report
     assert "  0.0-0.2  #                     1" in report
