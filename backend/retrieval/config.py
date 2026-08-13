@@ -22,7 +22,7 @@ class RetrievalConfig:
     sparse: bool = True  # add the keyword leg's candidates to the dense ones
     rerank: bool = True
     candidate_limit: int = 10  # per search leg, before fusion
-    rrf_k: int = 60  # RRF damping: large enough that no single leg's top hit dominates
+    rrf_k: int = 10  # RRF damping: small enough that rank still separates 10 candidates
     fused_limit: int = 20  # candidates handed to the reranker
     final_limit: int = 5  # chunks handed to generation
     min_rerank_score: int = 3  # below this a chunk is not worth answering from

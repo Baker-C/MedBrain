@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 17:58 -07:00
+**Last updated:** 2026-08-12 18:14 -07:00
 
 ---
 
@@ -244,16 +244,21 @@ configuration. Two requirements follow from this:
 
 **Candidate generation:** dense (pgvector HNSW, cosine `<=>`) and sparse
 (`websearch_to_tsquery` + `ts_rank`) searches run over the same chunk table, each pulling
-**top 40**. They run **sequentially, not concurrently** — one connection, and two round
+**top 10**. They run **sequentially, not concurrently** — one connection, and two round
 trips are not the latency worth buying threads for at this corpus size. **Fusion is RRF**
-(`k = 60`, sum of `1/(k+rank)`, agreement between lists compounds), taking **top 20** —
-rank-based, so cosine and `ts_rank` score scales never need reconciling. With the sparse
+(`k = 10`, sum of `1/(k+rank)`, agreement between lists compounds), taking **top 20** —
+rank-based, so cosine and `ts_rank` score scales never need reconciling. **`k` is sized to
+the candidate list, not inherited.** The published default of 60 was tuned for TREC runs
+about 1000 deep, where it still spreads scores 17-fold; over 10 candidates it spreads them
+11% and rank stops meaning anything, leaving agreement between the legs as the only signal
+that moves a chunk. At `k = 10` a rank-1 hit scores 0.091 against a rank-10 hit's 0.050 —
+position separates again, while a chunk both legs found still outranks one only dense saw. With the sparse
 toggle off, fusion becomes a passthrough — fusing one list against an empty one
 reproduces that list's own order — so the dense-only configuration needs no separate code
 path, and the reranker simply receives the dense candidates instead of the union.
 
 **Reranker (toggleable):** a self-built **LLM reranker** — one batched pointwise call
-scoring all 20 candidates 0–10 via `ChatOpenAI.with_structured_output`. **No temperature
+scoring every fused candidate 0–10 via `ChatOpenAI.with_structured_output`. **No temperature
 is set** — the
 gpt-5 family only accepts its default; determinism comes from the sort living in code,
 not from the sampler. That sort is stable, so ties keep RRF order, and a response that
@@ -272,7 +277,7 @@ backend container) and over a hosted rerank API (extra vendor).
 
 **The built shape.** `retrieval/config.py` holds one frozen `RetrievalConfig` carrying
 every switch (`gate`, `rewrite`, `sparse`, `rerank`) and every cut-off
-(`candidate_limit=10`, `rrf_k=60`, `fused_limit=20`, `final_limit=5`,
+(`candidate_limit=10`, `rrf_k=10`, `fused_limit=20`, `final_limit=5`,
 `min_rerank_score=3`). It is passed in,
 never read from ambient state. `pipeline.run_retrieval()` is the single entry point —
 gate → rewrite → embed → dense + sparse → fuse → rerank → filter → cut — returning either a

@@ -2502,3 +2502,31 @@ cross-configuration deltas (hybrid's cost on look-alikes; the Recall-vs-MRR trad
 are confounded and now carry that caveat in `DESIGN.md`. They need a re-run to be
 stated as retrieval effects. Within-case findings (multi-hop collapse, table numerics,
 partial section serving) are unaffected.
+
+
+## RRF damping resized to the candidate list: `rrf_k` 60 -> 10
+
+**Timestamp:** 2026-08-12 18:14 -07:00
+
+**What changed.** `RetrievalConfig.rrf_k` from 60 to 10.
+
+**Why.** 60 is the published RRF default (Cormack et al., 2009), and it was tuned against
+TREC runs roughly 1000 results deep. Over a list that long, `1/(60 + rank)` spreads scores
+about 17-fold and rank carries real weight. Over the 10 candidates each leg now returns it
+spreads them by 11%, and the consequence is not subtle: with `k = 60`, a chunk found by
+*both* legs at rank 10 scores 0.0286 and beats a chunk found by *one* leg at rank 1 at
+0.0164. Every positional signal was being drowned by a single binary — did both legs find
+it — so fusion had quietly become a vote-counter with an ordering tiebreak. At `k = 10`,
+rank 1 scores 0.091 against rank 10's 0.050, position separates candidates again, and
+cross-leg agreement still compounds without erasing rank. The constant was never wrong; it
+was calibrated for a list 100x longer than ours, and shrinking the legs without resizing it
+was the actual mistake.
+
+**What was rejected.** *Leaving `k` at 60 and letting the reranker sort it out.* The
+reranker does re-sort the survivors, so the fused order matters less than it looks — but
+`fused_limit` cuts the list *before* the reranker sees it, so a fusion that cannot rank is
+choosing what the reranker is allowed to consider. Fixing the constant is one character;
+relying on a downstream stage to paper over it is not defensible out loud.
+
+**Still unmeasured.** No eval run has been made at `k = 10`. The numbers above are
+arithmetic, not results.
