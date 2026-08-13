@@ -2640,3 +2640,29 @@ holding it would stall the last citation of every answer until the stream closed
 drifts. The lenient reader makes the drift harmless but also makes it unobservable, which
 is the same trap in a new place. A drift counter on the eval trace is the honest follow-up
 and is not built.
+
+## Eval sweep cut from four configurations to two
+
+**Timestamp:** 2026-08-12 18:40 -07:00
+
+`EVAL_CONFIGS` dropped `dense+sparse` and `dense+rerank`, keeping **dense** (baseline)
+and **dense+sparse+rerank** (everything on). Chosen: the before/after the stretch goal is
+actually graded on. Rejected: the full 2x2 sweep that attributes the gain to the sparse
+leg and the reranker separately.
+
+The rejected version was not wrong in principle — it answers a question the two-column
+version cannot. It lost on sample size. Only 13 of the 18 cases carry expected sources,
+so one case moving in or out of the served set shifts Recall@5 by ~0.08, and that is
+wider than the gaps the middle columns were being read for. The 17:27 run makes the point
+concretely: `dense+sparse` scored 0.81 strict/section Recall against dense's 0.81 and
+`dense+rerank`'s 0.92, and the 15:54 run ordered the same configurations differently.
+Two runs disagreeing on the ranking means the middle columns were reporting noise with
+the authority of a measurement. Reporting fewer numbers that hold up beats reporting more
+that do not.
+
+Cost was a secondary benefit, not the reason: the sweep is now 36 pipeline calls and 36
+judge calls instead of 72 and 72, taking a full run from ~35 minutes to ~18.
+
+**Consequence:** per-leg attribution is no longer available from the harness. If the
+sparse leg's individual contribution is ever contested, the answer is to grow the suite
+until a single case cannot move the metric, not to re-add the columns to the current one.
