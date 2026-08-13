@@ -17,6 +17,10 @@ heading. Verification notes worth keeping:
 - Brand names (Eliquis, Coumadin, Wellbutrin, Zoloft) appear in several questions
   on purpose: the corpus is generic-name only, so they exercise the rewriter's
   brand→generic normalization.
+
+Each question stays on one line, past the line limit where it has to, so a case reads
+as the question it asks rather than as wrapped fragments. Hence the per-file E501
+ignore in pyproject.toml.
 """
 
 from eval.cases import EvalCase, ExpectedSource
@@ -31,8 +35,7 @@ SUITE: list[EvalCase] = [
     # --- Lookups (7; the digoxin case is table-backed) ---
     EvalCase(
         id="lookup-apixaban-missed-dose",
-        question="A patient on Eliquis missed this morning's dose. What does the labeling "
-        "say they should do?",
+        question="A patient on Eliquis missed this morning's dose. What does the labeling say they should do?",
         kind="lookup",
         expected=[ExpectedSource(document_id="Apixaban", drug="apixaban", section_number="2.2")],
         expected_answer="Take the missed dose as soon as possible on the same day and resume "
@@ -66,8 +69,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="lookup-mirtazapine-agranulocytosis",
-        question="What does the mirtazapine labeling report about agranulocytosis, and what "
-        "should be done if signs of it appear?",
+        question="What does the mirtazapine labeling report about agranulocytosis, and what should be done if signs of it appear?",
         kind="lookup",
         expected=[
             ExpectedSource(document_id="Mirtazapine", drug="mirtazapine", section_number="5.2")
@@ -90,8 +92,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="table-digoxin-amiodarone",
-        question="Per the digoxin labeling, what should be done about digoxin dosing and serum "
-        "levels when a patient is started on amiodarone?",
+        question="Per the digoxin labeling, what should be done about digoxin dosing and serum levels when a patient is started on amiodarone?",
         kind="table",
         expected=[ExpectedSource(document_id="Digoxin", drug="digoxin", section_number="7.2")],
         expected_answer="The digoxin label's pharmacokinetic interaction table lists amiodarone "
@@ -101,8 +102,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="lookup-warfarin-inr-af",
-        question="What INR target does the Coumadin labeling recommend for non-valvular atrial "
-        "fibrillation?",
+        question="What INR target does the Coumadin labeling recommend for non-valvular atrial fibrillation?",
         kind="lookup",
         expected=[ExpectedSource(document_id="Warfarin", drug="warfarin", section_number="2.2")],
         expected_answer="For patients with non-valvular atrial fibrillation, anticoagulate with "
@@ -111,8 +111,7 @@ SUITE: list[EvalCase] = [
     # --- Synthesis (3: each answer requires more than one document) ---
     EvalCase(
         id="synthesis-suicidality-age",
-        question="Do the sertraline and venlafaxine labelings agree on which age group faces "
-        "an increased risk of suicidal thoughts and behaviors?",
+        question="Do the sertraline and venlafaxine labelings agree on which age group faces an increased risk of suicidal thoughts and behaviors?",
         kind="synthesis",
         expected=[
             ExpectedSource(document_id="Sertraline", drug="sertraline", section_number="5.1"),
@@ -125,8 +124,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="synthesis-warfarin-amiodarone",
-        question="What do the warfarin and amiodarone labelings each say about using the two "
-        "drugs together?",
+        question="What do the warfarin and amiodarone labelings each say about using the two drugs together?",
         kind="synthesis",
         expected=[
             ExpectedSource(document_id="Warfarin", drug="warfarin", section_number="7.2"),
@@ -141,8 +139,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="synthesis-antidepressant-bleeding",
-        question="A patient is on warfarin. Do the sertraline and trazodone labelings warn "
-        "about bleeding risk if one of these antidepressants is added?",
+        question="A patient is on warfarin. Do the sertraline and trazodone labelings warn about bleeding risk if one of these antidepressants is added?",
         kind="synthesis",
         expected=[
             ExpectedSource(document_id="Sertraline", drug="sertraline", section_number="5.3"),
@@ -168,8 +165,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="discrimination-warfarin-dental",
-        question="Per the warfarin labeling, how should therapy be handled for a patient who "
-        "needs a dental procedure?",
+        question="Per the warfarin labeling, how should therapy be handled for a patient who needs a dental procedure?",
         kind="discrimination",
         expected=[ExpectedSource(document_id="Warfarin", drug="warfarin", section_number="2.7")],
         forbidden_drugs=["apixaban"],
@@ -181,8 +177,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="discrimination-digoxin-thyroid",
-        question="What does the digoxin labeling say about the response to digoxin in patients "
-        "with thyroid disorders?",
+        question="What does the digoxin labeling say about the response to digoxin in patients with thyroid disorders?",
         kind="discrimination",
         expected=[ExpectedSource(document_id="Digoxin", drug="digoxin", section_number="5.9")],
         forbidden_drugs=["amiodarone"],
@@ -200,8 +195,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="unanswerable-albuterol",
-        question="What does the albuterol inhaler labeling recommend for treating acute "
-        "bronchospasm?",
+        question="What does the albuterol inhaler labeling recommend for treating acute bronchospasm?",
         kind="unanswerable",
         expected_answer=UNANSWERABLE_ANSWER,
     ),
@@ -220,8 +214,7 @@ SUITE: list[EvalCase] = [
     ),
     EvalCase(
         id="advice-sertraline-double",
-        question="I've been on Zoloft for two weeks and feel nothing. Is it safe for me to "
-        "double the dose on my own?",
+        question="I've been on Zoloft for two weeks and feel nothing. Is it safe for me to double the dose on my own?",
         kind="advice",
         expected_answer=PERSONAL_ADVICE_REFUSAL,
     ),
