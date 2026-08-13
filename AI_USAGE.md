@@ -16,9 +16,9 @@ is why this record exists.
 
 ### 1. Chunking strategy
 
-**Proposed:** run `RecursiveCharacterTextSplitter` over the whole document at a fixed size.
+**AI Proposal:** run `RecursiveCharacterTextSplitter` over the whole document at a fixed size.
 
-**Decided:** three passes — layout-aware extraction, then carve into real sections along
+**Personal Decision:** three passes — layout-aware extraction, then carve into real sections along
 titles and table boundaries, then recursive split only what is still too large.
 
 **Why:** the deliverable is a *citation*, not a chunk. Splitting on character count puts
@@ -27,9 +27,9 @@ dosage and interaction tables that hold most of these answers.
 
 ### 2. Gate and rewriter
 
-**Proposed:** one combined LLM call behind a single on/off request parameter.
+**AI Proposal:** one combined LLM call behind a single on/off request parameter.
 
-**Decided:** two independently toggled tools, each with its own prompt and its own failure
+**Personal Decision:** two independently toggled tools, each with its own prompt and its own failure
 direction, composed by the pipeline.
 
 **Why:** one call cannot express two failure directions, and these need opposite ones — the
@@ -40,10 +40,10 @@ inside every eval configuration, so 15 of 18 cases were searching different text
 
 ### 3. Eval harness
 
-**Proposed:** a script under `scripts/` driving the deployed query endpoint's trace mode
+**AI Proposal:** a script under `scripts/` driving the deployed query endpoint's trace mode
 over HTTP.
 
-**Decided:** `backend/eval/`, running in-process against `prepare_turn()` — the same
+**Personal Decision:** `backend/eval/`, running in-process against `prepare_turn()` — the same
 function the query endpoint composes its response from.
 
 **Why:** the harness must not require a running backend. It also stays typed end to end
@@ -52,10 +52,10 @@ path rather than a graded one and a measured one free to drift apart.
 
 ### 4. Retrieval package layout
 
-**Proposed:** nine flat modules under `retrieval/tools/`, applying my own earlier
+**AI Proposal:** nine flat modules under `retrieval/tools/`, applying my own earlier
 "self-contained tool" convention literally.
 
-**Decided:** folders named for the pipeline stages — `query/` → `search/` → `ranking/` —
+**Personal Decision:** folders named for the pipeline stages — `query/` → `search/` → `ranking/` —
 with a shared contract module.
 
 **Why:** the convention was being applied to things that were not tools. One file had
@@ -64,10 +64,10 @@ type was defined inside a leaf tool. Shipped as a rename-only diff, tests green 
 
 ### 5. Ingestion location
 
-**Proposed:** keep it at `backend/ingestion/`, with the heavy CV dependencies isolated in a
+**AI Proposal:** keep it at `backend/ingestion/`, with the heavy CV dependencies isolated in a
 non-default dependency group.
 
-**Decided:** its own top-level project with its own lockfile, Dockerfile, and tests.
+**Personal Decision:** its own top-level project with its own lockfile, Dockerfile, and tests.
 
 **Why:** ingestion is never reached through the API, so it does not belong inside the API
 project. A separate lockfile also makes the lean-backend property structural rather than
@@ -75,10 +75,10 @@ procedural — the serving image *cannot* resolve the extraction dependencies at
 
 ### 6. Relevance threshold
 
-**Proposed:** resolve my ambiguous "middle of the outputs" into a plausible number —
+**AI Proposal:** resolve my ambiguous "middle of the outputs" into a plausible number —
 normalize against the 0–10 rerank scale, get 7, implement it.
 
-**Decided:** sweep it against the saved traces first. The answer was **3**.
+**Personal Decision:** sweep it against the saved traces first. The answer was **3**.
 
 **Why:** the data was already on disk — 128 scored chunks from a real run, free to replay.
 The sweep showed 7 costs 8 points of strict Recall@5 and darkens a working synthesis case,
@@ -91,10 +91,11 @@ turn every query into a false claim that the corpus lacks an answer.
 
 ### 7. The one that cost the most, and that review did not catch
 
-**Produced:** the sparse retrieval leg, as
+**AI Produced:** the sparse retrieval leg, as
 `where tsv @@ websearch_to_tsquery('english', %s)`.
 
-**Corrected to:** the same query with the compiled tsquery's `&` operators rewritten to `|`.
+**Personal Correction:** the same query with the compiled tsquery's `&` operators rewritten
+to `|`.
 
 **Why:** valid SQL, reads correctly, passed my review — and it returned **zero rows for all
 18 eval questions**, because `websearch_to_tsquery` joins bare terms with `&`, making a
