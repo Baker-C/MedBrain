@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 18:14 -07:00
+**Last updated:** 2026-08-12 18:31 -07:00
 
 ---
 
@@ -244,7 +244,10 @@ configuration. Two requirements follow from this:
 
 **Candidate generation:** dense (pgvector HNSW, cosine `<=>`) and sparse
 (`websearch_to_tsquery` + `ts_rank`) searches run over the same chunk table, each pulling
-**top 10**. They run **sequentially, not concurrently** — one connection, and two round
+**top 10**. The sparse leg **OR-s its lexemes**: `websearch_to_tsquery` joins bare terms
+with `&`, which demands a chunk holding every word of the question and so returned nothing
+at all for 18 of 18 eval questions. The operators are rewritten to `|` textually, which
+keeps phrase and negation operators intact and lets `ts_rank` do the ordering. They run **sequentially, not concurrently** — one connection, and two round
 trips are not the latency worth buying threads for at this corpus size. **Fusion is RRF**
 (`k = 10`, sum of `1/(k+rank)`, agreement between lists compounds), taking **top 20** —
 rank-based, so cosine and `ts_rank` score scales never need reconciling. **`k` is sized to

@@ -2530,3 +2530,64 @@ relying on a downstream stage to paper over it is not defensible out loud.
 
 **Still unmeasured.** No eval run has been made at `k = 10`. The numbers above are
 arithmetic, not results.
+
+
+## The sparse leg had never returned a row
+
+**Timestamp:** 2026-08-12 18:31 -07:00
+
+**What was wrong.** `websearch_to_tsquery` joins bare terms with `&`. A natural-language
+question therefore compiled to a conjunction of every one of its lexemes —
+`'trazodon' & 'label' & 'say' & 'priapism'` — and demanded a single chunk containing all
+of them. Measured against the live corpus over all 18 eval questions: **18 of 18 returned
+zero rows**, while `priapism` alone matches 12 chunks. The query rewriter made it worse,
+since a longer, more explicit question is a longer conjunction.
+
+**What that means for everything already recorded.** The `dense+sparse` and
+`dense+sparse+rerank` configurations were not hybrid; they were dense-only with an empty
+second leg, which is why fusion was a passthrough and why 126 of 128 served chunks in the
+full-hybrid run carried a null `sparse_rank`. Any claim that the sparse leg *contributed*
+something to a served set is false for every run made before this fix — including the
+reading that the sparse leg pulls sibling-drug chunks and costs discrimination accuracy.
+It cannot have; it returned nothing. Those served-set differences came from the query
+rewriter running per configuration, fixed separately in `2953cba`. The stretch goal was
+being graded on a leg that never ran.
+
+**The fix.** Rewrite the compiled tsquery's `&` operators to `|`. This asks the question a
+keyword leg exists to ask — which chunks share the most terms — and leaves `ts_rank` to
+order them. The rewrite is textual, on the compiled tsquery rather than the user's string,
+so phrase (`<->`) operators and an explicit `or` pass through intact; keeping those is the
+reason `websearch_to_tsquery` was chosen over `to_tsquery` originally. Verified on the live
+corpus: `"serotonin syndrome" risk` keeps its phrase as `'serotonin' <-> 'syndrom' | 'risk'`.
+
+**Negation survives syntactically and not semantically, which is a real limitation.**
+`bleeding -warfarin` compiles to `'bleed' & !'warfarin'` and becomes `'bleed' | !'warfarin'`,
+where the disjunct "any chunk lacking warfarin" matches 1547 of 1711 chunks — a leading `-`
+stops excluding anything. Accepted rather than fixed: the string reaching this leg is the
+rewriter's output, generated prose containing no `-term` and no quotes, so the operator is
+unreachable in practice. Honouring exclusion under disjunction means parsing the tsquery
+into `(a | b) & !c`, and a parser with no caller is not worth its own bugs.
+
+**Verified against the live corpus, not a fixture.** After the change all 16 non-refused
+eval questions return 10 rows; the top-ranked chunk belongs to the **correct drug** in all
+13 answerable cases; and each case now overlaps the dense leg by 1–4 chunks, which is the
+first time RRF's agreement term has had anything to compound. The three unanswerable cases
+return chunks from unrelated drugs, as they should.
+
+**What was rejected.**
+
+- *Rebuilding the tsquery from `to_tsvector` lexemes joined with `|`.* Cleaner-looking, but
+  it discards phrase and negation handling — the whole reason `websearch_to_tsquery` is
+  here — to avoid a `replace()` whose only failure mode is a literal `&` inside a quoted
+  lexeme, which would degrade one lexeme rather than break the query.
+- *Leaving the leg conjunctive and calling it precision.* A leg that returns nothing on
+  every question in the suite is not precise, it is off.
+
+**No unit test covers this.** The backend test suite is hermetic and nothing in it touches
+Postgres, so a test asserting the SQL string would restate the code rather than check it.
+The evidence above is a live measurement against the corpus and is recorded here in place
+of a test. A DB-backed retrieval test is the honest follow-up and is not built.
+
+**Still unmeasured.** No eval run has been made with a sparse leg that works. Every
+retrieval metric in this repository describes dense-only retrieval, whatever its
+configuration was labelled.

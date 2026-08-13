@@ -1438,3 +1438,45 @@ rather than being silently kept.
 plus reuse tests in `backend/tests/retrieval/test_pipeline.py` and
 `backend/tests/eval/test_driver.py`. Commit: _pending_ (uncommitted work in flight on
 this branch).
+
+
+## Correcting AI-written SQL that silently disabled the sparse leg
+
+**Timestamp:** 2026-08-12 18:31 -07:00
+
+**AI tool:** Claude Code (Opus 5).
+
+**1. What it ended up as:** the sparse search query in `retrieval/search/sparse.py`.
+
+**The change and the reasoning:** the AI-written original was
+`where tsv @@ websearch_to_tsquery('english', %s) order by ts_rank(...)`. It is valid SQL,
+it reads correctly, it passed review, and it returned zero rows for all 18 eval questions,
+because `websearch_to_tsquery` joins bare terms with `&` and a whole question is therefore
+a conjunction no chunk satisfies. The failure was invisible from the application side: an
+empty leg is a documented, handled case in `fuse_rankings`, so fusion degraded silently to
+dense-only and the hybrid-retrieval stretch goal appeared to work for four eval
+configurations and a full report. It was caught only by asking why RRF scores clustered so
+tightly, then checking which legs the served chunks actually came from — 126 of 128 were
+dense-only. Now the compiled tsquery's `&` operators are rewritten to `|`.
+
+Worth recording as the shape of the mistake: the bug was not in code that errors, it was
+in code whose failure mode is indistinguishable from a legitimate empty result. Nothing in
+lint, mypy, or the hermetic test suite could see it, and the eval harness dutifully
+measured and reported the broken configuration for a full run.
+
+**The code diff and its commit:** `backend/retrieval/search/sparse.py`, `SPARSE_SEARCH`.
+Commit pending.
+
+**2. What it ended up as:** the failure-analysis reading of the sparse leg.
+
+**The change and the reasoning:** an earlier AI-written failure analysis attributed a
+discrimination regression to the sparse leg pulling sibling-drug chunks on shared
+vocabulary, and presented it as the honest cost of the stretch goal. That explanation was
+fluent, plausible, and impossible — the leg returned nothing in any of those runs. The
+served-set differences it described came from the query rewriter running once per
+configuration. Rejected and replaced. The lesson is that a confident causal story about a
+subsystem should be checked against whether that subsystem ran at all; this one survived
+because it sounded like the sort of tradeoff a hybrid retriever really does make.
+
+**The code diff and its commit:** documentation only; the superseded text is in the
+launch-directory copy of `DESIGN.md` and has not been committed. Commit pending.
