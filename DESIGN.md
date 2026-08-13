@@ -16,7 +16,7 @@ append-only history of *why* each choice was made, and what was rejected, lives 
 > `DESIGN_RECORDS.md`. Do not trim early; the working detail is worth more during the
 > build than the page count is.
 
-**Last updated:** 2026-08-12 18:47 -07:00
+**Last updated:** 2026-08-12 18:46 -07:00
 
 ---
 
@@ -561,8 +561,10 @@ against expected sources) and answer quality, runs from a single command, and pr
 report. If time runs short, cut a UI feature — never the eval harness.
 
 **It runs in-process — no HTTP, no running server.** The harness is a backend package,
-`backend/eval/`, run as `python -m eval` (kept out of the deployed image via
-`.dockerignore`, out of the repo's history via a gitignored `eval/runs/`). It calls
+`backend/eval/`, run as `python -m eval` from `backend/` — or as `make eval` from the
+repo root, a one-line `Makefile` target that is the assignment's "single command" and
+holds no logic of its own (kept out of the deployed image via `.dockerignore`, out of
+the repo's history via a gitignored `eval/runs/`). It calls
 `prepare_turn()` — the same single function the query endpoint composes its response
 from — and opens its own psycopg connection (hosted Supabase) and model clients. It
 measures the path users get because there is only one path to call; a refused case
@@ -594,10 +596,23 @@ deliberately stronger than the generator — scores each answer against the expe
 answer and the served excerpts; automated and mandatory (distinct from the optional
 live-pipeline judge, which only annotates).
 
-**Configurations (`eval/configs.py`):** four per case — dense · dense+sparse ·
-dense+rerank · dense+sparse+rerank — the stretch goal's graded before/after. Gate and
-rewriter stay on throughout: the advice cases need the gate, and on a single-turn
-suite the rewrite delta would measure only normalization (recorded limitation).
+**Configurations (`eval/configs.py`):** two per case — **dense** (baseline) and
+**dense+sparse+rerank** (everything on) — the stretch goal's graded before/after. The
+single-leg middle configurations were dropped: they doubled the run to attribute the
+gain between the sparse leg and the reranker, and on 13 scored cases a one-case swing
+moves Recall@5 by 0.08, which exceeds the gap they existed to show. Gate and rewriter
+stay on throughout: the advice cases need the gate, and on a single-turn suite the
+rewrite delta would measure only normalization (recorded limitation).
+
+**Report shape (`eval/report.py`, pure — traces and verdicts in, markdown out):** one
+section per configuration — rank metrics, behavior checks, judge counts, a per-query
+chunk hit-rate bar chart, then that configuration's failures — followed by a single
+**Comparison** section that puts the configurations side by side: rank metrics with the
+best marked, behavior and judge counts, and a histogram binning the queries by chunk hit
+rate so a configuration's misses show as mass on the left rather than only as a lower
+mean. Charts are ASCII inside fenced blocks, so the report renders identically in a
+terminal and in markdown. Progress during a run is a rewritable bar on **stderr** —
+stdout carries only the report, which keeps `make eval > report.md` honest.
 
 **Record/replay:** a run saves every trace to `eval/runs/<timestamp>.json`;
 `--score-only <run>` re-scores a saved run offline, so scoring and judge iteration

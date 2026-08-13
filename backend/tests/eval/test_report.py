@@ -21,10 +21,12 @@ CASES = [
 ]
 
 
-def trace(case_id: str, chunks: list[ChunkTrace], tags: list[str]) -> CaseTrace:
+def trace(
+    case_id: str, chunks: list[ChunkTrace], tags: list[str], config_name: str = "dense"
+) -> CaseTrace:
     return CaseTrace(
         case_id=case_id,
-        config_name="dense",
+        config_name=config_name,
         searched_query="q",
         refused=False,
         chunks=chunks,
@@ -54,3 +56,27 @@ def test_report_renders_metrics_and_failures(make_chunk_trace: MakeChunk) -> Non
     assert "advice question was not gate-refused" in report
     assert "hallucinated citation tags: S9" in report
     assert "unjudged: the judge call failed" in report
+    # The only served chunk hits, so this query's chunk hit rate is a full bar.
+    assert "hit  1.00  " + "#" * 24 in report
+
+
+def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> None:
+    """A configuration that retrieves nothing loses the metric and lands in the
+    bottom band of the histogram; the winner is the one marked."""
+    run = EvalRun(
+        started_at="2026-08-12T13:00:00-07:00",
+        traces=[
+            trace("hit", [make_chunk_trace()], tags=[], config_name="dense"),
+            trace("advice", [], tags=[], config_name="dense"),
+            trace("hit", [make_chunk_trace(document_id="Other")], tags=[], config_name="sparse"),
+            trace("advice", [], tags=[], config_name="sparse"),
+        ],
+    )
+    report = render_report(CASES, run, {})
+
+    assert "## Comparison" in report
+    assert "| metric | dense | sparse |" in report
+    assert "| Recall@5 (strict/section) | **1.00** | 0.00 |" in report
+    # dense's one query sits in the top band, sparse's in the bottom.
+    assert "  0.8-1.0  #                     1" in report
+    assert "  0.0-0.2  #                     1" in report
