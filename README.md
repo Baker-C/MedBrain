@@ -137,7 +137,7 @@ make eval
 The target holds no logic — it runs `cd backend && uv run python -m eval`, which is the
 equivalent if `make` is unavailable (it is not installed on Windows by default).
 
-18 authored cases run through the real pipeline under two retrieval configurations —
+24 authored cases run through the real pipeline under two retrieval configurations —
 `dense` (baseline) and `dense+sparse+rerank` — for the stretch goal's before/after. Traces
 are saved to `backend/eval/runs/<stamp>.json`; the report prints to stdout and lands beside
 the traces as `<stamp>.report.md`. Progress is a rewritable bar on stderr, so
