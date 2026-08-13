@@ -2251,3 +2251,392 @@ three findings, none of them in the carving rules the debt list flagged as the r
 Rejected alternative for (2)/(3): retry/backoff around the DB writes — rejected as
 gold-plating; per-document durability plus cheap re-runs already make a dropped
 connection a resumable event, which is the property the design actually wants.
+
+## Query gate widened from advice-only to advice + unsafe + off-topic
+
+**Timestamp:** 2026-08-12 17:17 -07:00
+
+**What changed.** The binary advice gate became a four-valued query gate. One
+structured-output call now returns `personal_advice`, `unsafe`, `off_topic`, or `none`,
+and each refusing reason streams its own pre-written message
+(`retrieval/query/query_gate.py`, `prompts/query_gate.py`, and two new files in
+`messages/`). The module, prompt, function, and test were renamed from `advice_gate` to
+`query_gate` because "advice gate" had stopped describing what it does.
+
+**Why.** DESIGN.md previously recorded the narrow gate as deliberate: off-topic questions
+would "fall through to the honest not-in-corpus path". In practice they did not fall
+through honestly. A question about spiders still embedded, still queried pgvector, and
+still served the top chunks; generation correctly said the labeling does not cover
+spiders and then appended a citation tag for every excerpt it had been handed, so the
+user got a decline followed by eight clickable deep links into venlafaxine and apixaban
+labels. The narrow gate was cheap for the model but expensive for the user's trust in the
+citations. Nothing in the corpus is about spiders, and finding that out after an embed, a
+hybrid search, a rerank, and a generation call is the wrong place to find it out.
+
+**What was rejected.**
+
+- *A relevance threshold instead of a wider gate.* Still the marked drop-in in
+  `retrieve_chunks()` and still unimplemented — see the standing note in DESIGN.md. It
+  answers a different question: the threshold catches an in-domain question the corpus
+  happens not to cover, the gate catches a question that was never about medicine. The
+  threshold is also the pre-announced live modification for the follow-up interview, and
+  spending it here would have bought a worse fix for this particular symptom.
+- *Suppressing the `sources` event when the answer looks like a decline.* Rejected: it
+  puts string matching on answer text into the transport, and the mapping is sent before
+  any token exists to match against. Citations already render only where a tag appears,
+  so the honest fix is for the model not to emit tags it did not answer from.
+- *Refusing questions about drugs outside the corpus as off-topic.* Rejected explicitly,
+  and the prompt says so: those questions are on topic and must reach the not-in-corpus
+  decline path. Three eval cases (`unanswerable-metformin`, `unanswerable-albuterol`,
+  `unanswerable-aspirin-reye`) are exactly that shape and would have flipped from a
+  correct decline to a wrong refusal.
+
+**The `unsafe` reason is harm-seeking, not harm-adjacent.** The prompt draws the line at
+intent: "how much of this would be lethal, and I want to use that" is refused; "what does
+the overdose section say" is answered, because reading a label's overdose and toxicity
+sections is the entire job of a clinical-operations lookup tool. A gate that flinched at
+dangerous-sounding vocabulary would refuse the corpus's most clinically useful content.
+
+## Grounded-answer prompt: answer the question, do not tour the excerpts
+
+**Timestamp:** 2026-08-12 17:17 -07:00
+
+**What changed.** `prompts/grounded_answer.py` gained two instructions: use the excerpts
+that bear on the question and ignore the rest, and write no tags at all when declining.
+`RetrievalConfig.final_limit` dropped from 8 to 5 (and `eval/report.py`'s `FINAL_K` with
+it, so retrieval is still graded at the budget generation actually sees).
+
+**Why.** A question about antidepressant options produced a thirteen-bullet answer in
+which all eight served chunks appeared, one bullet each, including trazodone's
+take-with-food instruction and mirtazapine's contraindication list. The prompt had told
+the model where it *may* draw from and never told it what the reply is *for*, so it
+defaulted to summarizing its input — a faithful, grounded, useless answer. The old text
+also said "if the excerpts do not contain the answer, say so" without saying what to do
+with the tags, and the model kept citing.
+
+**Why 8 → 5.** The first eval run showed the tradeoff already: sparse and rerank each
+raise Recall@8 while lowering MRR, so the extra slots at the bottom of the list were
+buying marginal recall. Those same low-ranked slots are what the model was padding
+answers with. Five keeps the head of a reranked list — where the eval's MRR says the
+right section actually sits — and removes the material that made answers sprawl. The next
+full eval run measures what recall this costs; that number is not yet in hand, and the
+metric tables in the failure analysis above are from the K=8 run.
+
+**What was rejected.** *Capping how many tags an answer may cite.* Rejected as the wrong
+lever — it constrains the symptom, not the cause, and a genuine multi-drug comparison
+legitimately cites five sources. The cause was a prompt that never named its own purpose.
+
+## Root `make eval` as the eval harness's single command
+
+**Timestamp:** 2026-08-12 17:19 -07:00
+
+The assignment asks the eval harness to run from a single command. It already did —
+`python -m eval` — but only if the reader first knew to `cd backend` and that the
+project's Python runs under `uv`. Added a root `Makefile` whose only target is `eval`,
+running `cd backend && uv run python -m eval`.
+
+The target holds no logic. It does not assemble the suite, pick configurations, or
+format anything; `eval/__main__.py` already prints the report to stdout and saves it
+beside the traces. Rejected: putting the run's flags (config selection, output paths)
+into make variables. That would split the harness's interface across two files and make
+the Makefile the place people look for eval behavior, which is exactly backwards — the
+harness owns its own CLI, and `--score-only` stays documented as a direct invocation.
+
+Also rejected: adding `test`, `lint`, and `typecheck` targets alongside it. CI calls
+those tools directly per workspace (`backend/`, `ingestion/`, `frontend/`), each with
+its own toolchain, and a root Makefile that re-declared them would be a second source of
+truth for what CI runs. The Makefile exists for the one command the assignment grades.
+
+Known limitation, recorded rather than fixed: `make` is not installed on the primary
+development machine (Windows), so the target is unverified by execution there. The
+command inside it is verified.
+
+## Eval report gains a cross-configuration comparison, a per-query hit-rate chart, and a progress bar
+
+**Timestamp:** 2026-08-12 17:27 -07:00
+
+The report printed four independent per-configuration sections and left the reader to
+diff them by eye. The stretch goal it exists to answer — what do the sparse leg and the
+reranker actually buy — was therefore never stated anywhere in the output. Added, after
+the per-configuration sections:
+
+- **Metric comparison**, the four configurations as columns, best value per metric in
+  bold. Restricted to section granularity under both strictnesses; document granularity
+  is the easier question and the configurations barely separate on it, so including it
+  would have doubled the table to make the same point twice.
+- **Outcome comparison**, behavior checks and judge counts as columns. `behavior_table`
+  and `judge_table` were split into `behavior_counts` / `judge_counts` (data) and a
+  shared renderer, so the per-configuration and comparison views cannot drift apart.
+- **Per-query chunk hit-rate chart** in each configuration's section, and a
+  **hit-rate histogram** binning queries into five bands in the comparison. The
+  histogram earns its place over the mean alone: a configuration that fails a few
+  queries badly and a configuration that is mediocre everywhere can report the same
+  Precision@K, and only the distribution separates them.
+
+Hit rate is defined as Precision@K under strict/section — deliberately not a new metric.
+A per-query chart of an already-tabled quantity is a second view of one number; a second
+*definition* would have been a second thing to defend.
+
+Charts are ASCII (`#` and `.`) inside fenced blocks, not Unicode block characters. The
+report prints to a Windows console and is also piped; Unicode bars raise
+`UnicodeEncodeError` on a redirected stdout under a cp1252 locale, and the prettier bar
+is not worth an output path that crashes.
+
+Progress is now a rewritable single-line bar rather than one line per case (72 lines of
+scrollback). It stays on **stderr**, preserving the existing split: stdout is the report
+alone, so `make eval > report.md` keeps working.
+
+
+## Relevance threshold built: `rerank_score >= 3`, chosen from the score distribution
+
+**Timestamp:** 2026-08-12 17:40 -07:00
+
+**What changed.** `RetrievalConfig.min_rerank_score = 3`. `retrieve_chunks()` filters
+`ranked` through `relevant_enough()` before the final cut; filtering to zero produces the
+existing decline path. `candidate_limit` also dropped from 40 to 10 per leg. This
+supersedes the standing note that the threshold was deliberately unimplemented — that
+note is removed from DESIGN.md.
+
+**Why 3, and how it was chosen.** Not guessed. The saved traces from the 2026-08-12 K=8
+run carry `rerank_score` on all 128 served chunks of the full-hybrid configuration, so
+the threshold was swept against real data before a line was written. The distribution is
+strongly bimodal — 54 chunks at 0, 43 at 9–10, and a thin middle — with mean 4.19 and
+median 3.0.
+
+| cutoff | chunks/query | cases declining | Recall@5 strict/section |
+|---|---|---|---|
+| 0 (none) | 5.00 | 0 | 0.96 |
+| 1 | 3.56 | 3 | 0.96 |
+| 3 | 3.31 | 3 | 0.96 |
+| 4 | 3.06 | 4 | 0.88 |
+| 10 | 1.44 | 6 | 0.58 |
+
+There is a plateau from 1 to 3 where the only cases that decline are the three
+`unanswerable-*` cases — which is the behavior the suite wants — and recall is untouched.
+At 4 the cliff starts: `synthesis-suicidality-age` loses its last surviving chunk and
+strict Recall@5 drops 8 points. **3 is the tightest cut that costs nothing**, and it is
+also the median of the observed scores, so "the middle of the outputs" and "the last free
+tightening" turned out to be the same number.
+
+**An unscored chunk passes the filter.** `rerank_score` is None in two situations: the
+reranker is toggled off, and the reranker's call failed and fell open to the fused order.
+Treating None as failing the threshold would have made an OpenAI blip indistinguishable
+from an empty corpus — every query declining, with a message claiming the labels do not
+cover the question. Rejected. The reranker's existing fail-open contract only holds if
+everything downstream of it also treats "no judgement" as different from "judged badly".
+The cost is honest and stated: with `rerank=false` there is no threshold at all, so the
+dense and dense+sparse eval configurations are unfiltered and the threshold becomes part
+of what the rerank toggle measures rather than a hidden third variable.
+
+**What was rejected.**
+
+- *A threshold on `rrf_score` for the rerank-off configurations.* It is a different
+  scale with no shared meaning — after the drop to 8 candidates per leg it spans roughly
+  0.015 to 0.033 — so a single number could not serve both, and two independently tuned
+  numbers would need two independent justifications for one feature.
+- *Threshold 4, the mean.* The arithmetic mean is dragged upward by the 9–10 mode; the
+  median is the better centre for a bimodal distribution, and the sweep confirms 4 is
+  already past the cliff.
+
+**`candidate_limit` 40 → 10, and what it does to fusion.** Each leg now returns 10. This
+has a consequence on RRF worth stating because it was not requested and is easy to miss:
+the fused score is `1/(k + rank)`, so with `rrf_k=60` a rank-1 hit scores 0.0164 and a
+rank-10 hit 0.0143 — a 15% spread across the whole list, against 64% when the legs
+returned 40. A chunk found by *both* legs at rank 10 (0.0286) now beats a chunk found by
+*one* leg at rank 1 (0.0164). Fusion has become close to a pure vote-counter, with
+position as a near-irrelevant tiebreak; the crossover holds for any `rrf_k > 8` at this
+depth. Left at 60 because it was not part of the request, and because the reranker
+re-sorts the survivors anyway — but if position should carry weight at this candidate
+count, `rrf_k` belongs in the 5–15 range. `fused_limit=20` is now inert: two legs of 10
+can union to at most 20, so it never cuts.
+
+**Not yet measured.** Every number above is replayed from the K=8 traces, which is sound
+for the threshold sweep (the filter is a pure function of stored scores) but not for
+`candidate_limit=10`, which changes what is retrieved and reranked in the first place.
+The next full eval run is what confirms the combination.
+
+### Eval harness: one rewritten query per case, reused across configurations
+
+**Timestamp:** 2026-08-12 17:53 -07:00
+
+The four configurations each re-ran the query rewriter, an LLM call, so the same case
+was searched with different text in each configuration. In the 2026-08-12 run
+(`backend/eval/runs/20260812T1554440700.json`), 15 of 18 cases had differing
+`searched_query` values across the four. Example — `lookup-trazodone-priapism`: dense
+searched "What does the trazodone labeling say about priapism", dense+rerank searched
+"What does the trazodone FDA prescribing information say about priapism".
+
+Consequence: every measured delta between configurations mixed the effect under test
+with rewriter variance, so the before/after comparison the assignment grades was not
+isolating the toggle. The symptom that made it undeniable: the dense and dense+sparse
+served sets overlap only ~56%, while zero sparse-ranked chunks were served in either —
+a difference the sparse leg cannot have produced.
+
+**Chosen:** compute the rewrite once per case, in `eval/driver.shared_rewrite()`, and
+pass it down through `prepare_turn` into `prepare_query` as an optional
+`rewritten_query`. When present and `rewrite` is on, it is searched and the rewriter is
+not called; when `rewrite` is off it is ignored and the raw query is searched, so the
+toggle keeps its meaning. Production is untouched: no request path supplies the
+argument, so in-app traffic still rewrites per query. Side effect: the run makes 1
+rewriter call per case instead of 4 (and one wasted call on the two advice cases, whose
+gate refuses before the rewrite is read — accepted, it is cheaper than the four it
+replaces).
+
+**Rejected — run the eval with `rewrite=False` in every configuration.** It removes the
+variance but changes what is measured: the suite would then evaluate retrieval over raw
+questions, including the brand-name cases (Eliquis, Coumadin, Wellbutrin, Zoloft) that
+exist specifically to exercise brand→generic normalization. Those cases would fail for
+a reason unrelated to the toggles.
+
+**Rejected — precompute the rewrite and feed it in as the case's `question` with
+`rewrite=False`.** Same searched text with less plumbing, but the advice gate would then
+see the rewritten text instead of the user's own words, changing what the gate cases
+measure, and each trace's `config_name` would no longer describe the config that ran.
+
+**Rejected — seed or cache the rewriter for determinism.** A cache keyed on the question
+is the same idea with more machinery, and the project has a standing no-caching
+decision; temperature pinning does not make an LLM call deterministic anyway.
+
+**Consequence for the recorded failure analysis:** the 2026-08-12 findings about
+cross-configuration deltas (hybrid's cost on look-alikes; the Recall-vs-MRR tradeoff)
+are confounded and now carry that caveat in `DESIGN.md`. They need a re-run to be
+stated as retrieval effects. Within-case findings (multi-hop collapse, table numerics,
+partial section serving) are unaffected.
+
+
+## RRF damping resized to the candidate list: `rrf_k` 60 -> 10
+
+**Timestamp:** 2026-08-12 18:14 -07:00
+
+**What changed.** `RetrievalConfig.rrf_k` from 60 to 10.
+
+**Why.** 60 is the published RRF default (Cormack et al., 2009), and it was tuned against
+TREC runs roughly 1000 results deep. Over a list that long, `1/(60 + rank)` spreads scores
+about 17-fold and rank carries real weight. Over the 10 candidates each leg now returns it
+spreads them by 11%, and the consequence is not subtle: with `k = 60`, a chunk found by
+*both* legs at rank 10 scores 0.0286 and beats a chunk found by *one* leg at rank 1 at
+0.0164. Every positional signal was being drowned by a single binary — did both legs find
+it — so fusion had quietly become a vote-counter with an ordering tiebreak. At `k = 10`,
+rank 1 scores 0.091 against rank 10's 0.050, position separates candidates again, and
+cross-leg agreement still compounds without erasing rank. The constant was never wrong; it
+was calibrated for a list 100x longer than ours, and shrinking the legs without resizing it
+was the actual mistake.
+
+**What was rejected.** *Leaving `k` at 60 and letting the reranker sort it out.* The
+reranker does re-sort the survivors, so the fused order matters less than it looks — but
+`fused_limit` cuts the list *before* the reranker sees it, so a fusion that cannot rank is
+choosing what the reranker is allowed to consider. Fixing the constant is one character;
+relying on a downstream stage to paper over it is not defensible out loud.
+
+**Still unmeasured.** No eval run has been made at `k = 10`. The numbers above are
+arithmetic, not results.
+
+
+## The sparse leg had never returned a row
+
+**Timestamp:** 2026-08-12 18:31 -07:00
+
+**What was wrong.** `websearch_to_tsquery` joins bare terms with `&`. A natural-language
+question therefore compiled to a conjunction of every one of its lexemes —
+`'trazodon' & 'label' & 'say' & 'priapism'` — and demanded a single chunk containing all
+of them. Measured against the live corpus over all 18 eval questions: **18 of 18 returned
+zero rows**, while `priapism` alone matches 12 chunks. The query rewriter made it worse,
+since a longer, more explicit question is a longer conjunction.
+
+**What that means for everything already recorded.** The `dense+sparse` and
+`dense+sparse+rerank` configurations were not hybrid; they were dense-only with an empty
+second leg, which is why fusion was a passthrough and why 126 of 128 served chunks in the
+full-hybrid run carried a null `sparse_rank`. Any claim that the sparse leg *contributed*
+something to a served set is false for every run made before this fix — including the
+reading that the sparse leg pulls sibling-drug chunks and costs discrimination accuracy.
+It cannot have; it returned nothing. Those served-set differences came from the query
+rewriter running per configuration, fixed separately in `2953cba`. The stretch goal was
+being graded on a leg that never ran.
+
+**The fix.** Rewrite the compiled tsquery's `&` operators to `|`. This asks the question a
+keyword leg exists to ask — which chunks share the most terms — and leaves `ts_rank` to
+order them. The rewrite is textual, on the compiled tsquery rather than the user's string,
+so phrase (`<->`) operators and an explicit `or` pass through intact; keeping those is the
+reason `websearch_to_tsquery` was chosen over `to_tsquery` originally. Verified on the live
+corpus: `"serotonin syndrome" risk` keeps its phrase as `'serotonin' <-> 'syndrom' | 'risk'`.
+
+**Negation survives syntactically and not semantically, which is a real limitation.**
+`bleeding -warfarin` compiles to `'bleed' & !'warfarin'` and becomes `'bleed' | !'warfarin'`,
+where the disjunct "any chunk lacking warfarin" matches 1547 of 1711 chunks — a leading `-`
+stops excluding anything. Accepted rather than fixed: the string reaching this leg is the
+rewriter's output, generated prose containing no `-term` and no quotes, so the operator is
+unreachable in practice. Honouring exclusion under disjunction means parsing the tsquery
+into `(a | b) & !c`, and a parser with no caller is not worth its own bugs.
+
+**Verified against the live corpus, not a fixture.** After the change all 16 non-refused
+eval questions return 10 rows; the top-ranked chunk belongs to the **correct drug** in all
+13 answerable cases; and each case now overlaps the dense leg by 1–4 chunks, which is the
+first time RRF's agreement term has had anything to compound. The three unanswerable cases
+return chunks from unrelated drugs, as they should.
+
+**What was rejected.**
+
+- *Rebuilding the tsquery from `to_tsvector` lexemes joined with `|`.* Cleaner-looking, but
+  it discards phrase and negation handling — the whole reason `websearch_to_tsquery` is
+  here — to avoid a `replace()` whose only failure mode is a literal `&` inside a quoted
+  lexeme, which would degrade one lexeme rather than break the query.
+- *Leaving the leg conjunctive and calling it precision.* A leg that returns nothing on
+  every question in the suite is not precise, it is off.
+
+**No unit test covers this.** The backend test suite is hermetic and nothing in it touches
+Postgres, so a test asserting the SQL string would restate the code rather than check it.
+The evidence above is a live measurement against the corpus and is recorded here in place
+of a test. A DB-backed retrieval test is the honest follow-up and is not built.
+
+**Still unmeasured.** No eval run has been made with a sparse leg that works. Every
+retrieval metric in this repository describes dense-only retrieval, whatever its
+configuration was labelled.
+
+
+## Sentinels are written strictly and read leniently
+
+**Timestamp:** 2026-08-12 18:47 -07:00
+
+**What changed.** `TAG_PATTERN` in `chat/context.py` and `COMPLETE_TAG` in
+`lib/sentinels.ts` both go from `[[S1]]` to `[[?S1]]?` — one bracket or two. The prompt
+and `sentinel()` are unchanged: `[[S1]]` is still what is asked for and still what is
+written into the context block.
+
+**Why.** The model drifts to single brackets on longer answers. Measured over the
+2026-08-12 run: **18 of 64 non-refused answers used `[S1]`**, and every one of them
+recorded an empty `tags` list. The user-visible cost is a citation rendered as dead
+literal text — `[S3] [S4]` sitting in the prose where two clickable sources belong.
+
+**The eval cost is worse, because it is invisible.** `unresolved_tags(trace.tags,
+trace.sources)` flags tags that resolve to nothing. An answer whose tags did not parse has
+*no* tags, so there is nothing to flag and the grounding check passes. The "grounding
+clean 18/18" result, and the claim that all 72 answers cited only actually-served chunks,
+were partly measuring answers that cited nothing the harness could see. Reading leniently
+takes the harness from 127 parsed citations to 193 over the same run — 66 citations across
+18 answers that previously scored as tagless.
+
+**Why not fix it in the prompt alone.** That was the earlier attempt: `530202d` added "in
+double brackets exactly as shown". The example that prompted this entry was produced after
+that change. A prompt cannot be a parser's contract when the same prompt is also asking
+for prose, and the failure is silent on both sides of the wire.
+
+**What was rejected.**
+
+- *Keeping the readers strict so drift stays visible.* That was the original call, on the
+  grounds that widening the regex hides how often the model misbehaves. It is wrong here:
+  the drift was not visible, it was invisible twice over — dead text in the UI and a
+  passing grounding check. Visibility belongs in a metric that counts drift, not in
+  breaking the feature.
+- *Repairing the answer text mid-stream.* Rewriting `[S1]` to `[[S1]]` in the transport
+  would make the backend edit a stream it deliberately passes through untouched. The
+  reader is the right place; the wire stays raw.
+
+**A complete `[S1]` is not withheld while streaming.** `TRAILING_PARTIAL_TAG` holds back
+unclosed fragments so a half-arrived sentinel never flashes as text. It now holds `[S`,
+`[S1`, `[[S1]` and friends, but deliberately not `[S1]`, which is already renderable —
+holding it would stall the last citation of every answer until the stream closed.
+
+**Not fixed: the metric that would have caught this.** Nothing counts how often the model
+drifts. The lenient reader makes the drift harmless but also makes it unobservable, which
+is the same trap in a new place. A drift counter on the eval trace is the honest follow-up
+and is not built.

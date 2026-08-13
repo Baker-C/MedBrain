@@ -28,14 +28,26 @@ def prepare_turn(
     question: str,
     history: list[HistoryMessage],
     config: RetrievalConfig,
+    rewritten_query: str | None = None,
 ) -> Turn:
     """Run the question through retrieval and hand back the answer stream it earned.
 
     A refusal never reaches generation: its text streams as canned events, which fold
     back to the same shape a generated answer does.
+
+    `rewritten_query` reuses a rewrite computed elsewhere, which is how the eval
+    harness holds the searched query steady across configurations; see
+    `retrieval.pipeline.prepare_query`.
     """
     result = run_retrieval(
-        clients.openai, clients.embeddings, clients.reranker, conn, question, history, config
+        clients.openai,
+        clients.embeddings,
+        clients.reranker,
+        conn,
+        question,
+        history,
+        config,
+        rewritten_query,
     )
     if isinstance(result, Refusal):
         return Turn(

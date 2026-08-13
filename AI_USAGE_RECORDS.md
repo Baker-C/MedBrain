@@ -1261,3 +1261,257 @@ The alternative reading — that the test was "broken by" the refactor — would
 the test's subject (the 502 contract) is intact, only its seam moved.
 
 **Commit:** c231b77 (PR #17).
+
+## Widening the gate: three corrections to the AI's first pass
+
+**Timestamp:** 2026-08-12 17:17 -07:00
+
+**AI tool:** Claude Code (Opus 5).
+
+Work: broaden the advice gate to cover unsafe and off-topic questions, stop declines
+from emitting citations, stop answers from touring every retrieved chunk, and cut
+`final_limit` to 5. Three places the AI's proposed approach was overridden.
+
+**1. What it ended up as:** the off-topic rule in `prompts/query_gate.py`.
+
+**The change and the reasoning:** the AI's first framing of `off_topic` was "the question
+is not about anything in this corpus" — a natural reading of "irrelevant to medical
+documentation", and wrong. Three eval cases (`unanswerable-metformin`,
+`unanswerable-albuterol`, `unanswerable-aspirin-reye`) ask real drug-labeling questions
+about drugs the corpus does not hold; under that framing all three would have been gated
+off as off-topic and stopped producing the not-in-corpus decline the assignment tests
+for. The rule was rewritten to be about *subject matter*, not *coverage*, with the
+distinction stated in the prompt itself: "A question about a drug this corpus may not
+hold is still none. It is on topic, and the search itself reports when nothing covers
+it." The gate decides whether a question belongs to medicine; only retrieval gets to
+decide whether this corpus answers it. Caught by reading the eval suite before writing
+the prompt rather than after the run.
+
+**The code diff and its commit:** `prompts/query_gate.py`, final paragraph. Commit
+`f48217a` (PR #21).
+
+**2. What it ended up as:** the fix for decline-with-citations.
+
+**The change and the reasoning:** the reported symptom was a decline ("the excerpts do
+not contain information about spiders") followed by eight deep links. The first candidate
+fix was transport-side — withhold or empty the `sources` event when the answer is a
+decline. Rejected on inspection of the contract: `sources` is emitted *before* any token
+exists, by design, so "is this a decline" is not knowable at that point without either
+buffering the whole answer (destroying streaming) or string-matching answer text inside
+the transport. Citations already render only where a tag appears in the text, so the
+correct fix was one prompt clause — "write no tags at all in that reply" — and the wider
+gate stopping the query before retrieval at all. Zero transport code changed.
+
+**The code diff and its commit:** `prompts/grounded_answer.py`, final paragraph; no
+change to `chat/stream.py`. Commit `530202d` (PR #21).
+
+**3. What it ended up as:** `RefusalReason` as a four-valued literal rather than three
+booleans.
+
+**The change and the reasoning:** the AI's first schema kept the existing shape and added
+fields — `personal_advice: bool`, `unsafe: bool`, `off_topic: bool`. Rejected: three
+booleans admit eight states, seven of which need a precedence rule nobody wrote, and the
+gate only ever streams one message. `reason: Literal["none", "personal_advice", "unsafe",
+"off_topic"]` plus a dict lookup makes the mutual exclusion the schema's problem instead
+of the code's, and `interpret_gate_verdict` stayed a two-line function.
+
+**The code diff and its commit:** `retrieval/query/query_gate.py`, `GateVerdict` and
+`REFUSAL_TEXT`. Commit `f48217a` (PR #21).
+
+**Not caught by the AI, noted here:** the answer the user pasted from the depression
+query showed single-bracket tags (`[S1]`), which match neither `TAG_PATTERN` nor
+`COMPLETE_TAG` and therefore render as dead literal text rather than links. The spiders
+answer showed correct double brackets. Format drift under some conditions is real and is
+not addressed by this change; flagged to the user rather than silently papered over by
+widening both regexes, which would hide how often the model drifts.
+
+## Eval report scope: minimal wrapper proposed, richer console report required
+
+**Timestamp:** 2026-08-12 17:31 -07:00
+
+**1. What it ended up as** — the root `make eval` target plus the eval report's
+comparison section, per-query chunk hit-rate chart, hit-rate histogram, and run
+progress bar.
+
+**2. The change and the reasoning** — asked for a `make eval` entrypoint, Claude Code
+(Opus 5) proposed the minimum that satisfied it: a one-line Makefile target wrapping the
+existing `python -m eval`, on the standing "no features beyond what was asked" rule, and
+separately offered `--score-only` against the saved run as a cheaper substitute for a
+live run. The owner rejected both narrowings and specified the fuller shape: a progress
+bar that fills as the run advances rather than 72 scrollback lines, per-configuration
+statistics *plus* an explicit comparison after them, a chunk-hit-rate-versus-query graph,
+and a real full run rather than a re-score.
+
+The reasoning behind the override, as stated: the harness is the assignment's
+heaviest-weighted piece, and its output is what a grader reads. A report that requires
+manually diffing four sections to answer "did the reranker help" does not deliver the
+before/after the stretch goal is graded on, even though every number needed to compute it
+was technically present. Restraint that was correct for application features was the
+wrong instinct for the graded artifact's own output.
+
+Two judgment calls inside the expanded scope were Claude's and stand: hit rate reuses
+Precision@K under strict/section rather than introducing a new metric, and the bars are
+ASCII rather than Unicode block characters because a redirected stdout under a cp1252
+locale raises `UnicodeEncodeError`.
+
+**3. The code diff and its commit** — `backend/eval/` is new in this working tree, so the
+change is additive rather than a diff against committed code. Its shape:
+
+```
++ Makefile                       (new: `eval` target -> cd backend && uv run python -m eval)
++ eval/__main__.py               progress_line() / show_progress(), stderr, replacing
+                                 the per-case `print(f"running {case.id} x {name}")`
++ eval/report.py                 behavior_table/judge_table split into *_counts + a shared
+                                 two_column_table; added hit_rate, bar, hit_rate_chart,
+                                 hit_rate_histogram, metric_values, metric_comparison,
+                                 outcome_comparison, comparison_section
++ tests/eval/test_report.py      test_comparison_ranks_the_configurations
+```
+
+**Commit:** not in PR #21, and still uncommitted. This work lives in the launch-directory
+working tree and was deliberately left out of that branch, which carries only the gate,
+threshold, retrieval and citation fixes. It needs its own commit against the current
+`origin/main`; the `eval/` lineage it was written on predates the merge of PR #20, so it
+cannot be committed by copying the tree.
+
+
+## Threshold chosen from replayed traces rather than from a plausible-sounding number
+
+**Timestamp:** 2026-08-12 17:40 -07:00
+
+**AI tool:** Claude Code (Opus 5).
+
+**1. What it ended up as:** `RetrievalConfig.min_rerank_score = 3`.
+
+**The change and the reasoning:** the request was a minimum score of "0.7", later
+restated as "right in the middle of avg outputs". 0.7 does not exist on either scale the
+pipeline carries — `rerank_score` is an integer 0–10, where 0.7 keeps everything except a
+flat 0, and `rrf_score` after the drop to 10 candidates per leg spans about 0.014–0.033,
+where 0.7 is above the maximum and every query would decline forever. The AI's initial
+move was to pick the "sensible" reading (normalize 0.7 against the 0–10 scale, giving a
+cutoff of 7) and implement it. That was rejected in favour of asking, then measuring:
+the 2026-08-12 eval run's saved traces carry `rerank_score` for all 128 served chunks, so
+the threshold could be swept offline against real answers at zero API cost. The sweep
+showed 7 would have cost 8 points of strict Recall@5 and darkened a real synthesis case,
+while 3 — the median of the distribution — is the tightest cut with no recall loss at
+all. The lesson worth keeping is that the number was available in the repository the
+whole time; the failure mode was reaching for a defensible-sounding constant instead of
+the data already on disk.
+
+**The code diff and its commit:** `retrieval/config.py` (`min_rerank_score: int = 3`) and
+`retrieval/pipeline.py` (`relevant_enough`, applied in `retrieve_chunks`). Commit `99edc1a`
+(PR #21).
+
+**2. What it ended up as:** `relevant_enough()` passing an unscored chunk.
+
+**The change and the reasoning:** the AI's first version filtered on
+`scored.rerank_score >= minimum`, which raises on None, and its second used
+`(scored.rerank_score or 0) >= minimum`, which silently maps None to 0 and therefore
+fails the threshold. Both were wrong in the same direction. `rerank_score` is None when
+the reranker is off *and* when its call failed open — the fail-open path the reranker
+documents deliberately — so under either version one unreachable OpenAI call would turn
+every query in the app into "the provided labeling does not cover that", a false
+statement about the corpus caused by a network error. The final version passes an
+unscored chunk explicitly and says why in the docstring. A fail-open contract only holds
+if every stage downstream of it also distinguishes "no judgement" from "judged badly".
+
+**The code diff and its commit:** `retrieval/pipeline.py`, `relevant_enough`. Commit
+`99edc1a` (PR #21).
+
+### Eval configurations re-ran the query rewriter (harness confound)
+
+**Timestamp:** 2026-08-12 17:53 -07:00
+
+**What it ended up as:** the eval harness's per-case shared rewrite
+(`eval/driver.shared_rewrite()` plus a `rewritten_query` argument threaded through
+`prepare_turn` and `prepare_query`).
+
+**The change and the reasoning:** the AI-written harness called `prepare_turn` once per
+(case, configuration) and let the pipeline rewrite the query inside each call. The
+rewriter is a nondeterministic LLM call, so each configuration searched different text
+for the same case — 15 of 18 cases in the 2026-08-12 run. The owner caught it in the run
+JSON and rejected the design: a comparison harness whose configurations differ by more
+than the toggle under test cannot support the before/after the assignment grades. This
+became: rewrite once per case, reuse the string in every configuration that has `rewrite`
+on, and keep the toggle honest by having a `rewrite=False` configuration ignore the
+supplied string and search the raw query. The confound also invalidated two of the
+recorded cross-configuration findings, which now carry an explicit caveat in `DESIGN.md`
+rather than being silently kept.
+
+**The code diff and its commit:** `backend/retrieval/pipeline.py`,
+`backend/conversation/turn.py`, `backend/eval/driver.py`, `backend/eval/__main__.py`,
+plus a reuse test in `backend/tests/eval/test_driver.py`. Commit `2953cba` (PR #21) —
+ported onto the current `origin/main` rather than committed from the working tree it was
+written in, because that tree's `eval/` lineage predates the merge of PR #20.
+
+
+## Correcting AI-written SQL that silently disabled the sparse leg
+
+**Timestamp:** 2026-08-12 18:31 -07:00
+
+**AI tool:** Claude Code (Opus 5).
+
+**1. What it ended up as:** the sparse search query in `retrieval/search/sparse.py`.
+
+**The change and the reasoning:** the AI-written original was
+`where tsv @@ websearch_to_tsquery('english', %s) order by ts_rank(...)`. It is valid SQL,
+it reads correctly, it passed review, and it returned zero rows for all 18 eval questions,
+because `websearch_to_tsquery` joins bare terms with `&` and a whole question is therefore
+a conjunction no chunk satisfies. The failure was invisible from the application side: an
+empty leg is a documented, handled case in `fuse_rankings`, so fusion degraded silently to
+dense-only and the hybrid-retrieval stretch goal appeared to work for four eval
+configurations and a full report. It was caught only by asking why RRF scores clustered so
+tightly, then checking which legs the served chunks actually came from — 126 of 128 were
+dense-only. Now the compiled tsquery's `&` operators are rewritten to `|`.
+
+Worth recording as the shape of the mistake: the bug was not in code that errors, it was
+in code whose failure mode is indistinguishable from a legitimate empty result. Nothing in
+lint, mypy, or the hermetic test suite could see it, and the eval harness dutifully
+measured and reported the broken configuration for a full run.
+
+**The code diff and its commit:** `backend/retrieval/search/sparse.py`, `SPARSE_SEARCH`.
+Commit `2f4384a` (PR #21).
+
+**2. What it ended up as:** the failure-analysis reading of the sparse leg.
+
+**The change and the reasoning:** an earlier AI-written failure analysis attributed a
+discrimination regression to the sparse leg pulling sibling-drug chunks on shared
+vocabulary, and presented it as the honest cost of the stretch goal. That explanation was
+fluent, plausible, and impossible — the leg returned nothing in any of those runs. The
+served-set differences it described came from the query rewriter running once per
+configuration. Rejected and replaced. The lesson is that a confident causal story about a
+subsystem should be checked against whether that subsystem ran at all; this one survived
+because it sounded like the sort of tradeoff a hybrid retriever really does make.
+
+**The code diff and its commit:** documentation only, in `DESIGN_RECORDS.md` under "The
+sparse leg had never returned a row". Commit `2f4384a` (PR #21). The superseded text
+itself lives in the launch-directory copy of `DESIGN.md`, which remains uncommitted — if
+that copy is ever committed it carries the false reading with it.
+
+
+## Reversing an AI recommendation to keep the sentinel readers strict
+
+**Timestamp:** 2026-08-12 18:47 -07:00
+
+**AI tool:** Claude Code (Opus 5).
+
+**1. What it ended up as:** the sentinel readers in `chat/context.py` and
+`lib/sentinels.ts`, widened to accept `[S1]` as well as `[[S1]]`.
+
+**The change and the reasoning:** when the single-bracket drift was first reported, the AI
+offered three options and argued for prompt-hardening alone, on the stated grounds that
+widening the regexes would "hide how often the model drifts". The prompt was hardened in
+`530202d` and the drift recurred. Measuring the run then showed the argument had been
+wrong on its own terms: 18 of 64 answers used single brackets, and because
+`unresolved_tags()` can only flag tags that parsed, every one of them scored as *grounding
+clean*. The drift was not visible and then hidden by a lenient reader — it was already
+invisible, in the UI as dead literal text and in the harness as a passing check. Reading
+both forms recovers 66 citations across those 18 answers on the same run. Recorded because
+the original recommendation sounded principled ("keep the contract strict, let violations
+show") and the principle was inverted in practice: the strict reader was what suppressed
+the signal. Where visibility genuinely belongs is a drift counter on the eval trace, which
+is named as a follow-up and not built.
+
+**The code diff and its commit:** `backend/chat/context.py` (`TAG_PATTERN`),
+`frontend/src/lib/sentinels.ts` (`COMPLETE_TAG`, `TRAILING_PARTIAL_TAG`), plus tests both
+sides. Commit `cd03e07` (PR #21).

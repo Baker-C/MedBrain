@@ -4,13 +4,22 @@
  *  Tokens arrive in arbitrary pieces, so a sentinel can be split across two of them
  *  (`[[S` then `1]]`). While streaming, a trailing fragment that might still become a
  *  tag is withheld, so it never flashes on screen as literal text.
+ *
+ *  Single brackets are accepted too. The prompt asks for `[[S1]]`, but the model drifts
+ *  to `[S1]` on longer answers, and a strict reader renders that as dead literal text
+ *  where a citation belongs. Reading both is the difference between a working link and
+ *  a broken one; see backend/chat/context.py, which reads the same two forms.
  */
 
 export type Segment = { kind: 'text'; text: string } | { kind: 'citation'; tag: string }
 
 /** Mirrors TAG_PATTERN in backend/chat/context.py. */
-const COMPLETE_TAG = /\[\[(S\d+)\]\]/g
-const TRAILING_PARTIAL_TAG = /\[\[?S?\d*\]?$/
+const COMPLETE_TAG = /\[\[?(S\d+)\]\]?/g
+
+/** A suffix that is still incomplete: an unclosed tag of either form, or `[[S1]` whose
+ *  second closing bracket may yet arrive. A complete `[S1]` is deliberately absent — it
+ *  is already renderable, and holding it would stall the last citation of an answer. */
+const TRAILING_PARTIAL_TAG = /\[\[?S?\d*$|\[\[S\d+\]$/
 
 /** The text safe to show now, and the suffix that may still turn into a tag. */
 export function splitHeldSuffix(text: string): { ready: string; held: string } {

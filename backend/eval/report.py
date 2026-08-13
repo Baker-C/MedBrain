@@ -18,7 +18,7 @@ from eval.scoring.retrieval import (
 )
 from eval.trace import CaseTrace, EvalRun
 
-FINAL_K = 8  # RetrievalConfig.final_limit: the chunks generation actually sees
+FINAL_K = 5  # RetrievalConfig.final_limit: the chunks generation actually sees
 
 LENSES: list[tuple[Strictness, Granularity]] = [
     ("strict", "document"),
