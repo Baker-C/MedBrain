@@ -1288,7 +1288,7 @@ decide whether this corpus answers it. Caught by reading the eval suite before w
 the prompt rather than after the run.
 
 **The code diff and its commit:** `prompts/query_gate.py`, final paragraph. Commit
-pending.
+`f48217a` (PR #21).
 
 **2. What it ended up as:** the fix for decline-with-citations.
 
@@ -1303,7 +1303,7 @@ correct fix was one prompt clause — "write no tags at all in that reply" — a
 gate stopping the query before retrieval at all. Zero transport code changed.
 
 **The code diff and its commit:** `prompts/grounded_answer.py`, final paragraph; no
-change to `chat/stream.py`. Commit pending.
+change to `chat/stream.py`. Commit `530202d` (PR #21).
 
 **3. What it ended up as:** `RefusalReason` as a four-valued literal rather than three
 booleans.
@@ -1316,7 +1316,7 @@ gate only ever streams one message. `reason: Literal["none", "personal_advice", 
 of the code's, and `interpret_gate_verdict` stayed a two-line function.
 
 **The code diff and its commit:** `retrieval/query/query_gate.py`, `GateVerdict` and
-`REFUSAL_TEXT`. Commit pending.
+`REFUSAL_TEXT`. Commit `f48217a` (PR #21).
 
 **Not caught by the AI, noted here:** the answer the user pasted from the depression
 query showed single-bracket tags (`[S1]`), which match neither `TAG_PATTERN` nor
@@ -1368,7 +1368,11 @@ change is additive rather than a diff against committed code. Its shape:
 + tests/eval/test_report.py      test_comparison_ranks_the_configurations
 ```
 
-**Commit:** pending.
+**Commit:** not in PR #21, and still uncommitted. This work lives in the launch-directory
+working tree and was deliberately left out of that branch, which carries only the gate,
+threshold, retrieval and citation fixes. It needs its own commit against the current
+`origin/main`; the `eval/` lineage it was written on predates the merge of PR #20, so it
+cannot be committed by copying the tree.
 
 
 ## Threshold chosen from replayed traces rather than from a plausible-sounding number
@@ -1395,7 +1399,8 @@ whole time; the failure mode was reaching for a defensible-sounding constant ins
 the data already on disk.
 
 **The code diff and its commit:** `retrieval/config.py` (`min_rerank_score: int = 3`) and
-`retrieval/pipeline.py` (`relevant_enough`, applied in `retrieve_chunks`). Commit pending.
+`retrieval/pipeline.py` (`relevant_enough`, applied in `retrieve_chunks`). Commit `99edc1a`
+(PR #21).
 
 **2. What it ended up as:** `relevant_enough()` passing an unscored chunk.
 
@@ -1411,7 +1416,7 @@ unscored chunk explicitly and says why in the docstring. A fail-open contract on
 if every stage downstream of it also distinguishes "no judgement" from "judged badly".
 
 **The code diff and its commit:** `retrieval/pipeline.py`, `relevant_enough`. Commit
-pending.
+`99edc1a` (PR #21).
 
 ### Eval configurations re-ran the query rewriter (harness confound)
 
@@ -1435,9 +1440,9 @@ rather than being silently kept.
 
 **The code diff and its commit:** `backend/retrieval/pipeline.py`,
 `backend/conversation/turn.py`, `backend/eval/driver.py`, `backend/eval/__main__.py`,
-plus reuse tests in `backend/tests/retrieval/test_pipeline.py` and
-`backend/tests/eval/test_driver.py`. Commit: _pending_ (uncommitted work in flight on
-this branch).
+plus a reuse test in `backend/tests/eval/test_driver.py`. Commit `2953cba` (PR #21) —
+ported onto the current `origin/main` rather than committed from the working tree it was
+written in, because that tree's `eval/` lineage predates the merge of PR #20.
 
 
 ## Correcting AI-written SQL that silently disabled the sparse leg
@@ -1465,7 +1470,7 @@ lint, mypy, or the hermetic test suite could see it, and the eval harness dutifu
 measured and reported the broken configuration for a full run.
 
 **The code diff and its commit:** `backend/retrieval/search/sparse.py`, `SPARSE_SEARCH`.
-Commit pending.
+Commit `2f4384a` (PR #21).
 
 **2. What it ended up as:** the failure-analysis reading of the sparse leg.
 
@@ -1478,5 +1483,35 @@ configuration. Rejected and replaced. The lesson is that a confident causal stor
 subsystem should be checked against whether that subsystem ran at all; this one survived
 because it sounded like the sort of tradeoff a hybrid retriever really does make.
 
-**The code diff and its commit:** documentation only; the superseded text is in the
-launch-directory copy of `DESIGN.md` and has not been committed. Commit pending.
+**The code diff and its commit:** documentation only, in `DESIGN_RECORDS.md` under "The
+sparse leg had never returned a row". Commit `2f4384a` (PR #21). The superseded text
+itself lives in the launch-directory copy of `DESIGN.md`, which remains uncommitted — if
+that copy is ever committed it carries the false reading with it.
+
+
+## Reversing an AI recommendation to keep the sentinel readers strict
+
+**Timestamp:** 2026-08-12 18:47 -07:00
+
+**AI tool:** Claude Code (Opus 5).
+
+**1. What it ended up as:** the sentinel readers in `chat/context.py` and
+`lib/sentinels.ts`, widened to accept `[S1]` as well as `[[S1]]`.
+
+**The change and the reasoning:** when the single-bracket drift was first reported, the AI
+offered three options and argued for prompt-hardening alone, on the stated grounds that
+widening the regexes would "hide how often the model drifts". The prompt was hardened in
+`530202d` and the drift recurred. Measuring the run then showed the argument had been
+wrong on its own terms: 18 of 64 answers used single brackets, and because
+`unresolved_tags()` can only flag tags that parsed, every one of them scored as *grounding
+clean*. The drift was not visible and then hidden by a lenient reader — it was already
+invisible, in the UI as dead literal text and in the harness as a passing check. Reading
+both forms recovers 66 citations across those 18 answers on the same run. Recorded because
+the original recommendation sounded principled ("keep the contract strict, let violations
+show") and the principle was inverted in practice: the strict reader was what suppressed
+the signal. Where visibility genuinely belongs is a drift counter on the eval trace, which
+is named as a follow-up and not built.
+
+**The code diff and its commit:** `backend/chat/context.py` (`TAG_PATTERN`),
+`frontend/src/lib/sentinels.ts` (`COMPLETE_TAG`, `TRAILING_PARTIAL_TAG`), plus tests both
+sides. Commit `cd03e07` (PR #21).
