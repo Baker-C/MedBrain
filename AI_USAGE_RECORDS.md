@@ -1368,11 +1368,12 @@ change is additive rather than a diff against committed code. Its shape:
 + tests/eval/test_report.py      test_comparison_ranks_the_configurations
 ```
 
-**Commit:** not in PR #21, and still uncommitted. This work lives in the launch-directory
-working tree and was deliberately left out of that branch, which carries only the gate,
-threshold, retrieval and citation fixes. It needs its own commit against the current
-`origin/main`; the `eval/` lineage it was written on predates the merge of PR #20, so it
-cannot be committed by copying the tree.
+**Commit:** carried by the `eval-report-comparison` branch, committed against the current
+`origin/main` (39df67c) rather than by copying the launch-directory tree, whose `eval/`
+lineage predates the merge of PR #20: `ebe75f7` (progress bar), `1723e93` (comparison
+section, per-query chart, histogram), `1e8ae16` (sweep narrowed to two configurations),
+`e9e2037` (root `make eval`), `ef72a60` (design docs). The launch-directory tree also
+holds concurrent sessions' uncommitted work, so only these five files were copied across.
 
 
 ## Threshold chosen from replayed traces rather than from a plausible-sounding number
