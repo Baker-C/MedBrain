@@ -9,7 +9,7 @@ a pass.
 from collections.abc import Sequence
 
 from eval.trace import CaseTrace
-from messages import NO_SUPPORTING_CONTEXT, PERSONAL_ADVICE_REFUSAL
+from messages import NO_SUPPORTING_CONTEXT, OFF_TOPIC_REFUSAL, PERSONAL_ADVICE_REFUSAL
 
 # The grounded prompt instructs "say that the provided labeling does not cover it";
 # these phrasings catch that admission in a generated answer.
@@ -28,9 +28,10 @@ def advice_refused(trace: CaseTrace) -> bool:
 
 
 def declined_unanswerable(trace: CaseTrace) -> bool:
-    """The app said the corpus does not hold the answer: the canned empty-retrieval
-    message, or a generated admission in the prompt's instructed phrasing."""
-    if trace.answer == NO_SUPPORTING_CONTEXT:
+    """The app declined instead of answering from outside the corpus: the canned
+    empty-retrieval message, the gate's off-topic refusal for a question outside
+    medicine, or a generated admission in the prompt's instructed phrasing."""
+    if trace.answer in (NO_SUPPORTING_CONTEXT, OFF_TOPIC_REFUSAL):
         return True
     lowered = trace.answer.lower()
     return any(phrase in lowered for phrase in ADMISSION_PHRASES)

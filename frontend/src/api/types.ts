@@ -3,7 +3,7 @@
 //
 // These are compile-time shapes only — responses are cast, not validated. A backend
 // rename therefore surfaces as a broken render, not a typed error at the boundary.
-// Deliberate: see DESIGN_RECORDS.
+// Deliberate: see DESIGN.md, known shortcuts.
 
 export type Role = 'user' | 'assistant'
 

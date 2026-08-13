@@ -33,6 +33,12 @@ line-length = 100
 [tool.ruff.lint]
 select = ["E", "F", "I"]
 
+[tool.ruff.lint.per-file-ignores]
+# The eval suite is authored ground truth. Each question stays on one line so a case
+# reads as the question it asks; wrapping them into fragments hurts the one file whose
+# readability is the point.
+"eval/suite.py" = ["E501"]
+
 [tool.mypy]
 strict = true
 files = ["api", "chat", "clients.py", "config.py", "conversation", "eval", "healthcheck.py", "messages", "persistence", "prompts", "retrieval", "tests"]

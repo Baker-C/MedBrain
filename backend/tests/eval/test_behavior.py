@@ -4,7 +4,12 @@ from collections.abc import Callable
 
 from eval.scoring.behavior import advice_refused, declined_unanswerable, forbidden_drugs_served
 from eval.trace import CaseTrace, ChunkTrace
-from messages import GATE_UNAVAILABLE, NO_SUPPORTING_CONTEXT, PERSONAL_ADVICE_REFUSAL
+from messages import (
+    GATE_UNAVAILABLE,
+    NO_SUPPORTING_CONTEXT,
+    OFF_TOPIC_REFUSAL,
+    PERSONAL_ADVICE_REFUSAL,
+)
 
 MakeCase = Callable[..., CaseTrace]
 MakeChunk = Callable[..., ChunkTrace]
@@ -25,6 +30,11 @@ def test_canned_no_context_message_declines(make_case_trace: MakeCase) -> None:
 def test_generated_admission_declines(make_case_trace: MakeCase) -> None:
     answer = "The provided labeling does not cover interactions with metformin."
     assert declined_unanswerable(make_case_trace(answer))
+
+
+def test_off_topic_refusal_declines(make_case_trace: MakeCase) -> None:
+    """A question outside medicine is gated before retrieval; refusing it is a decline."""
+    assert declined_unanswerable(make_case_trace(OFF_TOPIC_REFUSAL, refused=True))
 
 
 def test_a_real_answer_is_not_a_decline(make_case_trace: MakeCase) -> None:

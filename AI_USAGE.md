@@ -1,0 +1,71 @@
+# AI_USAGE.md
+
+**Tool:** Claude Code (Anthropic CLI, Voice Chat, Opus 5, a bit of Fable as well), used throughout — design interrogation, scaffolding, implementation, refactors, and drafting the eval suite. Almost every architectural decision in this repo is mine; the AI's job was to argue, implement, and to be my info-fetcher during brainstorming.
+
+---
+
+### 1. Chunking strategy
+
+**AI Proposal:** run `RecursiveCharacterTextSplitter` over the whole document at a fixed size.
+
+**Personal Decision:** three passes — layout-aware extraction, then carve into real sections
+along titles and table boundaries, then recursive split only what is still too large.
+
+**Why:** the deliverable is a *citation*, not a chunk. Splitting on character count puts
+section boundaries mid-chunk, so the section a citation names is wrong, and it shreds the
+dosage and interaction tables that hold most of these answers.
+
+### 2. The one that cost the most, and that review did not catch
+
+**AI Produced:** the sparse retrieval leg, as
+`where tsv @@ websearch_to_tsquery('english', %s)`.
+
+**Personal Correction:** the same query with the compiled tsquery's `&` operators rewritten
+to `|`.
+
+**Why:** `websearch_to_tsquery` joins bare terms with `&`, so a question became a conjunction
+no chunk satisfies — zero rows on all 18 eval questions.
+
+**The AI missed it** because the bug never errors. An empty leg is a handled case, so fusion
+fell back to dense-only and reported a clean run; lint, types, and hermetic tests only check
+code against itself.
+
+**I caught it** by reading output rather than code: the fused scores clustered too tightly,
+and 126 of 128 served chunks were dense-only. It had already written a failure analysis
+crediting a leg that never ran.
+
+### 3. Gate and rewriter
+
+**AI Proposal:** one combined LLM call behind a single on/off request parameter.
+
+**Personal Decision:** two independently toggled tools, each with its own prompt and its own
+failure direction, composed by the pipeline.
+
+**Why:** one call cannot express two failure directions, and these need opposite ones — the
+gate fails **closed** (a broken safety check refuses rather than answers ungated), the
+rewriter fails **open** (a broken rewriter never blocks a question). Making the rewriter a
+separately toggled stage is also what exposed a second harness bug alongside §2: it was
+re-running inside every eval configuration, so 15 of 18 cases were searching different text.
+
+### 4. Eval harness
+
+**AI Proposal:** a script under `scripts/` driving the deployed query endpoint's trace mode
+over HTTP.
+
+**Personal Decision:** `backend/eval/`, running in-process against `prepare_turn()` — the same
+function the query endpoint composes its response from.
+
+**Why:** the harness must not require a running backend. It also stays typed end to end
+instead of parsing JSON back into restated shapes, and there is now exactly one answer
+path rather than a graded one and a measured one free to drift apart.
+
+### 5. Ingestion location
+
+**AI Proposal:** keep it at `backend/ingestion/`, with the heavy CV dependencies isolated in a
+non-default dependency group.
+
+**Personal Decision:** its own top-level project with its own lockfile, Dockerfile, and tests.
+
+**Why:** ingestion is never reached through the API, so it does not belong inside the API
+project. A separate lockfile also makes the lean-backend property structural rather than
+procedural — the serving image *cannot* resolve the extraction dependencies at all.
