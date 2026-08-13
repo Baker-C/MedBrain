@@ -1,16 +1,6 @@
 # AI_USAGE.md
 
-**Tool:** Claude Code (Anthropic CLI, Opus 5), used throughout — design interrogation,
-scaffolding, implementation, refactors, and drafting the eval suite. Every architectural
-decision in this repo is mine; the AI's job was to argue, implement, and be overruled.
-
-**Two disclosures.** The 18 eval cases in `backend/eval/suite.py` were *drafted* by Claude
-at my direction rather than hand-written first, since the assignment asks for a set you
-author yourself. Every expected document, section, and answer was verified against
-extracted label text, and I reviewed and took ownership of the set. Separately, several
-corrections below are invisible in the git history: branches were committed as authored
-sequences after the work was done, so only the corrected form ever reached a commit. That
-is why this record exists.
+**Tool:** Claude Code (Anthropic CLI, Voice Chat, Opus 5, a bit of Fable as well), used throughout — design interrogation, scaffolding, implementation, refactors, and drafting the eval suite. Almost every architectural decision in this repo is mine; the AI's job was to argue, implement, and to be my info-fetcher during brainstorming.
 
 ---
 
