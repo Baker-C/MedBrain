@@ -103,8 +103,13 @@ def test_comparison_ranks_the_configurations(make_chunk_trace: MakeChunk) -> Non
     report = render_report(CASES, run, {})
 
     assert "## Comparison" in report
-    assert "| metric | dense | sparse |" in report
-    assert "| Recall@5 (strict/section) | **1.00** | 0.00 |" in report
+    assert "| metric | dense | sparse | Δ vs dense |" in report
+    # The delta is signed and measured against the first configuration in the run.
+    assert "| Recall@5 (strict/section) | **1.00** | 0.00 | -1.00 |" in report
+    # A behavioral count delta is a whole number of cases, not a rate.
+    assert "| grounding clean | 2/2 | 2/2 | +0 |" in report
+    # The per-query movement chart names the regression and signs it.
+    assert "hit  -1.00  " + "-" * 24 in report
     # dense's one query sits in the top band, sparse's in the bottom.
     assert "  0.8-1.0  #                     1" in report
     assert "  0.0-0.2  #                     1" in report

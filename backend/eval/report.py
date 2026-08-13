@@ -300,12 +300,18 @@ def suite_overview(cases: list[EvalCase], run: EvalRun) -> str:
         "strict/section) under each configuration, so a weak question type is visible before",
         "any aggregate is read.",
         "",
-        "| cases | kind | what it is there to catch | " + " | ".join(names) + " |",
-        "|---|---|---|" + "---|" * len(names),
+        "| cases | kind | what it is there to catch | "
+        + " | ".join(names + delta_labels(names))
+        + " |",
+        "|---|---|---|" + "---|" * (len(names) + len(delta_labels(names))),
     ]
     for kind, count in kinds.most_common():
-        rates = " | ".join(kind_hit_rates(by_id, run, kind))
-        lines.append(f"| {count} | `{kind}` | {KIND_PURPOSE[kind]} | {rates} |")
+        cells = kind_hit_rates(by_id, run, kind)
+        cells += [
+            "n/a" if "n/a" in (cells[0], cell) else signed(float(cell) - float(cells[0]))
+            for cell in cells[1:]
+        ]
+        lines.append(f"| {count} | `{kind}` | {KIND_PURPOSE[kind]} | {' | '.join(cells)} |")
     return "\n".join(lines)
 
 
@@ -357,10 +363,17 @@ def hit_rate_histogram(cases: dict[str, EvalCase], run: EvalRun) -> str:
         counts = [0] * len(BANDS)
         for rate in rates:
             counts[band_of(rate)] += 1
-        rows = [f"  {band_label(i):<8} {'#' * count:<20} {count:>2}" for i, count in
-                enumerate(counts)]
+        rows = []
+        for index, count in enumerate(counts):
+            marker = ""
+            if index == 0:
+                marker = "  <- worst: almost nothing served was on target"
+            elif index == len(BANDS) - 1:
+                marker = "  <- best: nearly everything served was on target"
+            rows.append(f"  {band_label(index):<8} {'#' * count:<20} {count:>2}{marker}")
         blocks.append(f"{name}\n" + "\n".join(rows))
-    return "```\n" + "\n\n".join(blocks) + "\n```"
+    header = "  band     queries               n   (band = hit rate 0.00-1.00; n = how many"
+    return "```\n" + header + " queries)\n\n" + "\n\n".join(blocks) + "\n```"
 
 
 def metric_values(pairs: list[tuple[EvalCase, CaseTrace]]) -> dict[str, float]:
@@ -382,6 +395,60 @@ def metric_values(pairs: list[tuple[EvalCase, CaseTrace]]) -> dict[str, float]:
             ]
         )
     return values
+
+
+def delta_labels(names: list[str]) -> list[str]:
+    """A delta column per configuration beyond the baseline, which is the first one."""
+    others = names[1:]
+    if len(others) == 1:
+        return [f"Δ vs {names[0]}"]
+    return [f"Δ {name}" for name in others]
+
+
+def signed(value: float) -> str:
+    """A delta reads as a delta: the sign is the point, so it is never dropped."""
+    return f"{value:+.2f}"
+
+
+def count_delta(baseline: str, other: str) -> str:
+    """Delta between two count cells like `2/3`, or `0` for the unjudged row.
+
+    `n/a` where either side has no denominator — a kind with nothing to retrieve has no
+    change to report, and printing 0 would claim it was measured and found equal.
+    """
+    if "n/a" in (baseline, other):
+        return "n/a"
+    return f"{int(other.split('/')[0]) - int(baseline.split('/')[0]):+d}"
+
+
+def delta_bar(value: float, width: int = BAR_WIDTH) -> str:
+    """A signed magnitude bar: `+` gained, `-` lost, dots for the rest of the scale."""
+    filled = min(round(abs(value) * width), width)
+    mark = "+" if value > 0 else "-"
+    return (mark * filled).ljust(width, ".")
+
+
+def hit_rate_deltas(cases: dict[str, EvalCase], run: EvalRun) -> str:
+    """Per-query movement between the baseline and the last configuration, worst last.
+
+    The aggregate says the stack helped; this says which questions it helped, and which
+    it cost. A configuration that lifts the mean while dropping a query it used to answer
+    has made a trade, and the trade is only visible here.
+    """
+    names = config_names(run)
+    if len(names) < 2:
+        return "_only one configuration in this run_"
+    baseline, latest = names[0], names[-1]
+    before = {c.id: hit_rate(c, t) for c, t in paired(cases, run, baseline) if c.expected}
+    after = {c.id: hit_rate(c, t) for c, t in paired(cases, run, latest) if c.expected}
+    moved = sorted(
+        ((case_id, after[case_id] - rate) for case_id, rate in before.items() if case_id in after),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    width = max(len(case_id) for case_id, _ in moved)
+    lines = [f"{case_id:<{width}}  {signed(d)}  {delta_bar(d)}" for case_id, d in moved]
+    return "```\n" + "\n".join(lines) + "\n```"
 
 
 def wide_table(corner: str, columns: list[str], rows: list[tuple[str, list[str]]]) -> str:
@@ -408,8 +475,9 @@ def metric_comparison(cases: dict[str, EvalCase], run: EvalRun) -> str:
             else f"{by_config[name][label]:.2f}"
             for name in names
         ]
+        cells += [signed(by_config[name][label] - by_config[names[0]][label]) for name in names[1:]]
         rows.append((label, cells))
-    return wide_table("metric", names, rows)
+    return wide_table("metric", names + delta_labels(names), rows)
 
 
 def outcome_comparison(cases: dict[str, EvalCase], run: EvalRun, verdicts: Verdicts) -> str:
@@ -421,10 +489,12 @@ def outcome_comparison(cases: dict[str, EvalCase], run: EvalRun, verdicts: Verdi
         for name in names
     }
     labels = [label for label, _ in next(iter(by_config.values()))]
-    rows = [
-        (label, [dict(by_config[name])[label] for name in names]) for label in labels
-    ]
-    return wide_table("check", names, rows)
+    rows = []
+    for label in labels:
+        cells = [dict(by_config[name])[label] for name in names]
+        cells += [count_delta(cells[0], dict(by_config[name])[label]) for name in names[1:]]
+        rows.append((label, cells))
+    return wide_table("check", names + delta_labels(names), rows)
 
 
 def comparison_section(cases: dict[str, EvalCase], run: EvalRun, verdicts: Verdicts) -> str:
@@ -443,9 +513,20 @@ def comparison_section(cases: dict[str, EvalCase], run: EvalRun, verdicts: Verdi
             "A configuration that wins on rank metrics and loses a behavioral check has not",
             "improved the product: the checks below are pass/fail obligations, not scores.\n",
             outcome_comparison(cases, run, verdicts),
+            f"\n### Per-query movement ({lens}) — which questions actually changed\n",
+            "Each query's chunk hit rate under the last configuration minus its rate under",
+            "the baseline, best gain first. A mean can rise while individual questions",
+            "regress, and a regression here is a question the system used to answer better.\n",
+            hit_rate_deltas(cases, run),
             f"\n### Distribution of per-query chunk hit rate ({lens})\n",
-            "Queries binned by hit rate — how the mean is actually composed. Mass in the",
-            "leftmost band is the failure signature a mean alone hides.\n",
+            "**Higher bands are better, and the count is queries, not a score.** A band is a",
+            "hit-rate range from 0.00 to 1.00: a query in `0.8-1.0` had nearly every one of",
+            "its served chunks on target, one in `0.0-0.2` had almost none. The number beside",
+            "each bar is how many of the scored queries landed in that band, so the counts sum",
+            "to the scored-case count and never exceed it.",
+            "",
+            "Read it as a shape: mass moving **down** the list between configurations is the",
+            "improvement, and any mass left in the top band is the failure a mean alone hides.\n",
             hit_rate_histogram(cases, run),
         ]
     )
