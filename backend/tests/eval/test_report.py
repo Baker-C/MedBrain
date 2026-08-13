@@ -74,9 +74,12 @@ def test_preamble_states_the_criteria_and_counts_the_suite(make_chunk_trace: Mak
 
     assert "### What was tested" in report
     assert "2 authored single-turn cases" in report
-    # One case carries expected sources, the advice case does not.
+    # Each kind carries its own hit rate. The lookup case's single served chunk hits;
+    # the advice case has no expected source, so a retrieval score would be meaningless
+    # rather than zero.
     assert "| 1 | `lookup` |" in report
-    assert "| 1 | `advice` |" in report
+    assert report.count("| 1.00 |") >= 1
+    assert "| n/a |" in report
     # Every criteria block the reader needs to judge a number.
     assert "### What is measured, and what each number means" in report
     assert "### What is recorded as a failure" in report

@@ -129,6 +129,30 @@ independently, so one case can appear on several lines:
 - the judge call itself failed, which is surfaced as `unjudged` rather than dropped, so a
   broken judge can never be mistaken for a clean run."""
 
+# Repeated under every retrieval table on purpose. The preamble defines these at length,
+# but the reader who needs the definition is looking at the table, not at the preamble.
+LENS_LEGEND = f"""**Reading this table.** `@{FINAL_K}` is the cut-off: only the {FINAL_K} chunks
+generation actually saw are scored, so retrieval is graded on what the answer could have
+been written from. Columns are three different questions — **Recall** = of the sources
+the case requires, the share that were retrieved (the binding constraint: nothing
+downstream recovers a fact that never arrived); **MRR** = 1/rank of the first correct
+chunk (was it near the top, not merely present); **Precision** = of the chunks served,
+the share that were on target.
+
+Rows are the four lenses, which differ in what counts as the right source:
+
+- `strict/document` — the exact label the case was authored against.
+- `strict/section` — that same label *and* the right numbered section. The demanding
+  lens, and the one used for every per-query chart and failure line below.
+- `lenient/document` — any sibling label for the same drug counts. Six of the ten drugs
+  have near-identical labels from different manufacturers, so this is often a genuinely
+  correct answer from a different document.
+- `lenient/section` — a sibling label, right section.
+
+The strict-to-lenient gap is the measure of whether same-drug documents are told apart;
+the document-to-section gap is the measure of whether the right *part* of the label was
+found."""
+
 VALIDITY_NOTE = """### What these numbers do not establish
 
 The suite is small by construction — it is authored ground truth, and every expected
@@ -237,10 +261,32 @@ KIND_PURPOSE = {
 }
 
 
-def suite_overview(cases: list[EvalCase]) -> str:
-    """What the suite is made of, counted from the cases so the prose cannot go stale."""
+def kind_hit_rates(cases: dict[str, EvalCase], run: EvalRun, kind: str) -> list[str]:
+    """Mean chunk hit rate for one case kind, one cell per configuration.
+
+    `n/a` where the kind has no expected sources: advice and unanswerable cases have
+    nothing correct to retrieve, so a retrieval score for them would be meaningless
+    rather than zero.
+    """
+    cells = []
+    for name in config_names(run):
+        rates = [
+            hit_rate(case, trace)
+            for case, trace in paired(cases, run, name)
+            if case.kind == kind and case.expected
+        ]
+        cells.append(f"{mean(rates):.2f}" if rates else "n/a")
+    return cells
+
+
+def suite_overview(cases: list[EvalCase], run: EvalRun) -> str:
+    """What the suite is made of, counted from the cases so the prose cannot go stale,
+    with each kind's chunk hit rate beside it — which question types retrieval fails on
+    is the first thing worth knowing, and the per-query chart is too fine to show it."""
+    by_id = {case.id: case for case in cases}
     kinds = Counter(case.kind for case in cases)
     scored = sum(1 for case in cases if case.expected)
+    names = config_names(run)
     lines = [
         "### What was tested",
         "",
@@ -250,17 +296,22 @@ def suite_overview(cases: list[EvalCase]) -> str:
         f"{len(cases) - scored} are the cases that must refuse or decline, and are scored",
         "behaviorally instead — there is no correct document for them to retrieve.",
         "",
-        "| cases | kind | what it is there to catch |",
-        "|---|---|---|",
+        f"The rightmost columns are that kind's mean chunk hit rate (Precision@{FINAL_K},",
+        "strict/section) under each configuration, so a weak question type is visible before",
+        "any aggregate is read.",
+        "",
+        "| cases | kind | what it is there to catch | " + " | ".join(names) + " |",
+        "|---|---|---|" + "---|" * len(names),
     ]
     for kind, count in kinds.most_common():
-        lines.append(f"| {count} | `{kind}` | {KIND_PURPOSE[kind]} |")
+        rates = " | ".join(kind_hit_rates(by_id, run, kind))
+        lines.append(f"| {count} | `{kind}` | {KIND_PURPOSE[kind]} | {rates} |")
     return "\n".join(lines)
 
 
-def preamble(cases: list[EvalCase]) -> str:
+def preamble(cases: list[EvalCase], run: EvalRun) -> str:
     """The criteria, stated before any result, so every number lands against a rule."""
-    return "\n\n".join([suite_overview(cases), HOW_TO_READ, FAILURE_RULES, VALIDITY_NOTE])
+    return "\n\n".join([suite_overview(cases, run), HOW_TO_READ, FAILURE_RULES, VALIDITY_NOTE])
 
 
 def hit_rate(case: EvalCase, trace: CaseTrace) -> float:
@@ -451,6 +502,8 @@ def config_section(
         "Higher is better in every column. Recall is the binding constraint; Precision must",
         "be read beside it, since serving fewer chunks raises Precision on its own.\n",
         retrieval_table(pairs),
+        "",
+        LENS_LEGEND,
         "\n### Behavior — the refusal, honesty, and citation obligations\n",
         "Pass/fail per case. These are correctness requirements rather than scores: anything",
         "short of the full count is a defect, however good the metrics above look.\n",
@@ -472,7 +525,7 @@ def config_section(
 def render_report(cases: list[EvalCase], run: EvalRun, verdicts: Verdicts) -> str:
     """The whole report: the criteria first, then per configuration, then the comparison."""
     by_id = {case.id: case for case in cases}
-    parts = [f"# MedBrain eval report — {run.started_at}", "", preamble(cases)]
+    parts = [f"# MedBrain eval report — {run.started_at}", "", preamble(cases, run)]
     for name in config_names(run):
         parts += config_section(name, paired(by_id, run, name), verdicts)
     parts.append(comparison_section(by_id, run, verdicts))

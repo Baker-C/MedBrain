@@ -606,8 +606,9 @@ rewrite delta would measure only normalization (recorded limitation).
 
 **Report shape (`eval/report.py`, pure — traces and verdicts in, markdown out):** the
 report **states its own criteria before any result** — what the suite is made of (counted
-from the cases, so the prose cannot go stale), what each metric means and how it can
-mislead, the pass condition for every behavioral check, what is recorded as a failure,
+from the cases, so the prose cannot go stale, with each kind's mean chunk hit rate per
+configuration beside it, so a weak *question type* is visible before any aggregate is
+read), what each metric means and how it can mislead, the pass condition for every behavioral check, what is recorded as a failure,
 and what the sample size does not establish. A saved run is read on its own by a grader,
 so it must not require `DESIGN.md` to be interpretable. Then one section per
 configuration — rank metrics, behavior checks, judge counts, a per-query
